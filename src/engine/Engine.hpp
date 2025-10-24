@@ -1,40 +1,92 @@
 #pragma once
+
+/* make VulkanHpp function calls accept structure parameters directly (easier
+ * to map to the original Vulkan C API) */
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS 1
 #include "Engine.hpp"
+#include "SDL3/SDL_video.h"
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+#include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan_raii.hpp>
+
+namespace vkengine
+{
 
 /* Vulkan Engine wrapper - this holds all necessary Vulkan utilities for
  * rendering or compute purposes */
-class VkEngine {
-public:
-  VkEngine() = delete;
+class VkEngine
+{
+  public:
+	VkEngine() = delete;
 
-  /* engine takes ownership of the Vulkan instance */
-  VkEngine(const vk::ApplicationInfo &appInfo,
-           const std::vector<const char *> &requiredExts,
-           const std::vector<const char *> &valLayers) {
-    createVkInstance(appInfo, requiredExts, valLayers);
-    pickPhysicalDevice();
-  }
+	/* engine takes ownership of the Vulkan instance */
+	VkEngine(const std::string &title, const std::string &app_identifier);
+	~VkEngine();
 
-  ~VkEngine();
+  private:
+	std::string m_Title;
+	std::string m_AppIdentifier;
+	SDL_Window *m_Window = nullptr;
 
-private:
-  /* nullptr because constructors are deleted */
-  vk::raii::Instance m_VkInstance = nullptr;
-  vk::raii::PhysicalDevice m_PhysicalDevice = nullptr;
+	/* nullptr because constructors are deleted */
+	vk::raii::Instance       m_VkInstance     = nullptr;
+	vk::raii::PhysicalDevice m_PhysicalDevice = nullptr;
+	vk::raii::Device         m_Device         = nullptr;
+	vk::raii::Queue          m_GraphicsQueue  = nullptr;
+	vk::raii::Queue          m_PresentQueue   = nullptr;
+	vk::raii::SurfaceKHR     m_VkSurface      = nullptr;
+	vk::raii::SwapchainKHR   m_SwapChain      = nullptr;
+	vk::raii::PipelineLayout m_PipelineLayout = nullptr;
+	vk::raii::Pipeline       m_Pipeline       = nullptr;
 
-  const std::vector<const char *> m_RequiredDevExts = {
-      vk::KHRSwapchainExtensionName,
-      vk::KHRSpirv14ExtensionName,
-      vk::KHRSynchronization2ExtensionName,
-      vk::KHRCreateRenderpass2ExtensionName,
-  };
+	/* swapchain stuff */
+	std::vector<vk::Image>           m_SwapChainImgs;
+	std::vector<vk::raii::ImageView> m_SwapChainImgViews;
+	vk::Format                       m_SwapChainImgFormat{vk::Format::eUndefined};
+	vk::Extent2D                     m_SwapChainExtent;
 
-  /* */
-  void pickPhysicalDevice();
+	uint32_t m_GraphicsQueueFamilyIdx;
+	uint32_t m_PresentQueueFamilyIdx;
 
-  /* */
-  void createVkInstance(const vk::ApplicationInfo &appInfo,
-                        const std::vector<const char *> &requiredExts,
-                        const std::vector<const char *> &valLayers);
+	const std::vector<const char *> m_RequiredDevExts = {
+	    vk::KHRSwapchainExtensionName,
+	    vk::KHRSpirv14ExtensionName,
+	    vk::KHRSynchronization2ExtensionName,
+	    vk::KHRCreateRenderpass2ExtensionName,
+	};
+
+	void init_window();
+
+	void init_surface();
+
+	/* */
+	void init_physical_device();
+
+	/* */
+	void init_vkinstance();
+
+	void init_logical_device();
+
+	void init_swap_chain();
+
+	/* choose the most suitable format for the swapchain from a vector of
+	 * supported formats */
+	vk::SurfaceFormatKHR
+	    choose_swap_surface_format(const std::vector<vk::SurfaceFormatKHR> &surface_formats) const;
+
+	vk::PresentModeKHR
+	    choose_swap_present_mode(const std::vector<vk::PresentModeKHR> &present_modes) const;
+
+	vk::Extent2D get_swap_extent(const vk::SurfaceCapabilitiesKHR &capabilities) const;
+
+	uint32_t choose_swap_min_img_count(vk::SurfaceCapabilitiesKHR surface_capabilities) const;
+
+	void init_swap_image_views();
+
+	void init_graphics_pipeline();
+
+	[[nodiscard]] vk::raii::ShaderModule create_shader_module(const std::vector<char> &code) const;
 };
+
+}        // namespace vkengine

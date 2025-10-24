@@ -41,7 +41,6 @@
 *.dwo
 
 build/*
-!build/.gitkeep
 .cache/
 
 
@@ -57,3 +56,6 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
+
+# SPIRV compiled shader files
+*.spv

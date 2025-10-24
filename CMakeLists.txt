@@ -36,34 +36,6 @@ set(CMAKE_CXX_STANDARD 20 CACHE STRING "CMake CXX Standard")
 # set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 ################################################################################
-## VULKAN SETUP
-################################################################################
-find_package(Vulkan REQUIRED)
-
-# initially - I was going to use C++20 modules but due to poor clangd support
-# for them, I decided to stick to the old header includes
-# add_library(VkCppModule)
-# add_library(Vulkan::cppm ALIAS VkCppModule)
-# 
-# target_compile_definitions(VkCppModule
-#   PUBLIC
-#   VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-#   VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-# )
-# 
-# target_include_directories(VkCppModule PRIVATE "${Vulkan_INCLUDE_DIR}")
-# target_link_libraries(VkCppModule PUBLIC Vulkan::Vulkan)
-# set_target_properties(VkCppModule PROPERTIES CXX_STANDARD 20)
-# target_sources(VkCppModule
-#   PUBLIC
-#   FILE_SET cxx_modules TYPE CXX_MODULES
-#   BASE_DIRS
-#   "${Vulkan_INCLUDE_DIR}"
-#   FILES
-#   "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
-# )
-
-################################################################################
 ## FETCH DEPENDENCIES
 ################################################################################
 include(FetchContent)
@@ -92,6 +64,28 @@ FetchContent_MakeAvailable(SDL3)
 # bindings in a different language (e.g., lua - to make development easier)
 
 ################################################################################
+## Shader Compilation Function
+################################################################################
+# this is quite frankly the ugliest, pos function declaration syntax I have
+# ever seen in my entire life ...
+set(SLANGC_EXECUTABLE "slangc")
+function (add_slang_shader_target TARGET)
+  cmake_parse_arguments("SHADER" "" "" "SOURCES" ${ARGN})
+  set(SHADERS_DIR ${CMAKE_SOURCE_DIR}/shaders)
+  add_custom_command(
+    OUTPUT ${SHADERS_DIR}/slang.spv
+    COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv
+      -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name
+      -entry vert_main -entry frag_main -o slang.spv
+    WORKING_DIRECTORY ${SHADERS_DIR}
+    DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
+    COMMENT "Compiling Slang Shaders"
+    VERBATIM
+  )
+  add_custom_target(${TARGET} DEPENDS ${SHADERS_DIR}/slang.spv)
+endfunction()
+
+################################################################################
 ## EXECUTABLE BUILD INSTRUCTIONS
 ################################################################################
 
@@ -101,11 +95,19 @@ add_executable(${PROJECT_NAME} main.cpp)
 # add our VkEngine
 add_subdirectory(src/)
 
+# compile the shaders into SPIRV
+add_slang_shader_target(SPIRV_SHADERS
+  SOURCES
+    ${CMAKE_SOURCE_DIR}/shaders/base.slang
+  )
+
+# make sure that shaders are compiled/built before the project
+add_dependencies(${PROJECT_NAME} SPIRV_SHADERS)
+
 # link with SDL3 shared libraries, Vulkan, etc.
 target_link_libraries(
   ${PROJECT_NAME} PRIVATE
     SDL3::SDL3
-    Vulkan::Vulkan
     VkEngine::VkEngine
     # Vulkan::cppm  # Vulkan module - see VULKAN SETUP above
 )
