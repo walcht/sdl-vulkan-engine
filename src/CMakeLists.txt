@@ -31,6 +31,34 @@ find_package(Vulkan REQUIRED)
 # )
 
 ################################################################################
+## FETCH DEPENDENCIES
+################################################################################
+include(FetchContent)
+# SDL3 core - for creating a Vulkan context
+FetchContent_Declare(
+  SDL3
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+  GIT_TAG a8589a84226a6202831a3d49ff4edda4acab9acd # v3.2.24
+)
+FetchContent_MakeAvailable(SDL3)
+
+# GLM - graphics-related mathematics library
+#CPMAddPackage("gh:g-truc/glm@1.0.1")
+
+# gtest - for unit testing
+#CPMAddPackage("gh:google/googletest@1.17.0")
+
+# cgltf - gltf loader
+# CPMAddPackage("gh:jkuhlmann/cgltf@1.15")
+
+# imgui - imediate mode GUI
+# CPMAddPackage("gh:ocornut/imgui@1.92.3")
+
+# build the engine code as a shared library separately - this has the benefit of
+# not recompiling non-changing engine code and having some potential language
+# bindings in a different language (e.g., lua - to make development easier)
+
+################################################################################
 ## ENGINE SOURCE FILES (*.cpp)
 ################################################################################
 target_sources(VkEngine
@@ -57,6 +85,8 @@ target_include_directories(VkEngine
 target_link_libraries(VkEngine
   PUBLIC
     Vulkan::Vulkan
+    # Vulkan::cppm  # Vulkan module - see VULKAN SETUP above
+    SDL3::SDL3
 )
 
 

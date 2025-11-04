@@ -468,7 +468,7 @@ void VkEngine::init_graphics_pipeline()
 	/* a shader module is a thin wrapper around shader code which may contain
 	 * multiple entry points */
 	vk::raii::ShaderModule base_shader_module =
-	    create_shader_module(utils::read_binary(utils::get_spirv_shaders_path()));
+	    create_shader_module(utils::read_binary(utils::get_spirv_shaders_path() / "base.spv"));
 
 	/* specify the vertex shader entry point in the shader module */
 	vk::PipelineShaderStageCreateInfo vert_shader_stage_info{

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.2)
 
 # instruct CMake that what follows is the description of a distinct software
 # project of a given name
@@ -36,53 +36,32 @@ set(CMAKE_CXX_STANDARD 20 CACHE STRING "CMake CXX Standard")
 # set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 ################################################################################
-## FETCH DEPENDENCIES
-################################################################################
-include(FetchContent)
-# SDL3 core - for creating a Vulkan context
-FetchContent_Declare(
-  SDL3
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-  GIT_TAG a8589a84226a6202831a3d49ff4edda4acab9acd # v3.2.24
-)
-FetchContent_MakeAvailable(SDL3)
-
-# GLM - graphics-related mathematics library
-#CPMAddPackage("gh:g-truc/glm@1.0.1")
-
-# gtest - for unit testing
-#CPMAddPackage("gh:google/googletest@1.17.0")
-
-# cgltf - gltf loader
-# CPMAddPackage("gh:jkuhlmann/cgltf@1.15")
-
-# imgui - imediate mode GUI
-# CPMAddPackage("gh:ocornut/imgui@1.92.3")
-
-# build the engine code as a shared library separately - this has the benefit of
-# not recompiling non-changing engine code and having some potential language
-# bindings in a different language (e.g., lua - to make development easier)
-
-################################################################################
 ## Shader Compilation Function
 ################################################################################
-# this is quite frankly the ugliest, pos function declaration syntax I have
-# ever seen in my entire life ...
+# compile shaders into build/shaders/ subfolder
+set(SHADERS_IN_DIR ${CMAKE_SOURCE_DIR}/shaders)
+set(SHADERS_OUT_DIR ${CMAKE_BINARY_DIR}/shaders)
 set(SLANGC_EXECUTABLE "slangc")
+
+# ugly cmake stuff ...
 function (add_slang_shader_target TARGET)
   cmake_parse_arguments("SHADER" "" "" "SOURCES" ${ARGN})
-  set(SHADERS_DIR ${CMAKE_SOURCE_DIR}/shaders)
+  cmake_path(GET SHADER_SOURCES STEM SHADER_SOURCES_FILENAME)
+
+  set(SHADER_OUTPUT_PATH ${SHADERS_OUT_DIR}/${SHADER_SOURCES_FILENAME}.spv)
+  message("SHADER_OUTPUT_PATH=${SHADER_OUTPUT_PATH}")
+
   add_custom_command(
-    OUTPUT ${SHADERS_DIR}/slang.spv
+    OUTPUT ${SHADER_OUTPUT_PATH}
     COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv
       -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name
-      -entry vert_main -entry frag_main -o slang.spv
-    WORKING_DIRECTORY ${SHADERS_DIR}
-    DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
-    COMMENT "Compiling Slang Shaders"
+      -entry vert_main -entry frag_main -o ${SHADER_OUTPUT_PATH}
+    WORKING_DIRECTORY ${SHADERS_IN_DIR}
+    DEPENDS ${SHADERS_IN_DIR} ${SHADER_SOURCES}
+    COMMENT "Compiling Slang shaders"
     VERBATIM
   )
-  add_custom_target(${TARGET} DEPENDS ${SHADERS_DIR}/slang.spv)
+  add_custom_target(${TARGET} DEPENDS ${SHADER_OUTPUT_PATH})
 endfunction()
 
 ################################################################################
@@ -107,7 +86,5 @@ add_dependencies(${PROJECT_NAME} SPIRV_SHADERS)
 # link with SDL3 shared libraries, Vulkan, etc.
 target_link_libraries(
   ${PROJECT_NAME} PRIVATE
-    SDL3::SDL3
     VkEngine::VkEngine
-    # Vulkan::cppm  # Vulkan module - see VULKAN SETUP above
 )

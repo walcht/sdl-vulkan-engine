@@ -50,10 +50,9 @@ class VkEngine
 	uint32_t m_PresentQueueFamilyIdx;
 
 	const std::vector<const char *> m_RequiredDevExts = {
-	    vk::KHRSwapchainExtensionName,
-	    vk::KHRSpirv14ExtensionName,
-	    vk::KHRSynchronization2ExtensionName,
-	    vk::KHRCreateRenderpass2ExtensionName,
+    vk::KHRSwapchainExtensionName,
+	  vk::KHRSpirv14ExtensionName,
+	  vk::KHRSynchronization2ExtensionName,
 	};
 
 	void init_window();

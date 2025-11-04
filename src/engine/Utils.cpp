@@ -38,10 +38,13 @@ std::vector<char> read_binary(const std::string &filepath)
 	return bytearray;
 }
 
+/*
+ * it is assumed that shaders are available at in the folder 'shaders/' in
+ * current executalbe path
+ */
 fs::path get_spirv_shaders_path()
 {
-	/* ../../../shaders/ */
-	return fs::current_path().parent_path().parent_path().parent_path() / "shaders";
+	return fs::current_path() / "shaders";
 }
 
 }        // namespace utils
