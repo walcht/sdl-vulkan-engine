@@ -33,6 +33,7 @@ std::vector<char> read_binary(const std::string &filepath)
 	}
 
 	std::vector<char> bytearray(file.tellg());
+  file.seekg(0, std::ios::beg);
 	file.read(bytearray.data(), static_cast<std::streamsize>(bytearray.size()));
 	file.close();
 	return bytearray;

@@ -59,6 +59,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 SDL_AppResult SDL_AppIterate(void *appstate) {
   /* we rely on C++ exceptions to propagate and cleanly exit the program */
   try {
+    auto app = static_cast<AppState *>(appstate);
+    app->vkEnginePtr->draw_frame();
   } catch (const std::exception &e) {
     SDL_LogError(SDL_LOG_CATEGORY_ERROR, "%s", e.what());
     return SDL_APP_FAILURE;

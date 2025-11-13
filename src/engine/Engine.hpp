@@ -19,6 +19,7 @@ class VkEngine
 {
   public:
 	VkEngine() = delete;
+  void draw_frame() const;
 
 	/* engine takes ownership of the Vulkan instance */
 	VkEngine(const std::string &title, const std::string &app_identifier);
@@ -30,15 +31,20 @@ class VkEngine
 	SDL_Window *m_Window = nullptr;
 
 	/* nullptr because constructors are deleted */
-	vk::raii::Instance       m_VkInstance     = nullptr;
-	vk::raii::PhysicalDevice m_PhysicalDevice = nullptr;
-	vk::raii::Device         m_Device         = nullptr;
-	vk::raii::Queue          m_GraphicsQueue  = nullptr;
-	vk::raii::Queue          m_PresentQueue   = nullptr;
-	vk::raii::SurfaceKHR     m_VkSurface      = nullptr;
-	vk::raii::SwapchainKHR   m_SwapChain      = nullptr;
-	vk::raii::PipelineLayout m_PipelineLayout = nullptr;
-	vk::raii::Pipeline       m_Pipeline       = nullptr;
+	vk::raii::Instance       m_VkInstance         = nullptr;
+	vk::raii::PhysicalDevice m_PhysicalDevice     = nullptr;
+	vk::raii::Device         m_Device             = nullptr;
+	vk::raii::Queue          m_GraphicsQueue      = nullptr;
+	vk::raii::Queue          m_PresentQueue       = nullptr;
+	vk::raii::SurfaceKHR     m_VkSurface          = nullptr;
+	vk::raii::SwapchainKHR   m_SwapChain          = nullptr;
+	vk::raii::PipelineLayout m_PipelineLayout     = nullptr;
+	vk::raii::Pipeline       m_Pipeline           = nullptr;
+	vk::raii::CommandPool    m_GraphicsCmdPool    = nullptr;
+	vk::raii::CommandBuffer  m_GraphicsCmdBuffer  = nullptr;
+	vk::raii::Semaphore      m_PresentCompleteSem = nullptr;
+	vk::raii::Semaphore      m_RenderFinishedSem  = nullptr;
+	vk::raii::Fence          m_DrawFence          = nullptr;
 
 	/* swapchain stuff */
 	std::vector<vk::Image>           m_SwapChainImgs;
@@ -50,9 +56,9 @@ class VkEngine
 	uint32_t m_PresentQueueFamilyIdx;
 
 	const std::vector<const char *> m_RequiredDevExts = {
-    vk::KHRSwapchainExtensionName,
-	  vk::KHRSpirv14ExtensionName,
-	  vk::KHRSynchronization2ExtensionName,
+	    vk::KHRSwapchainExtensionName,
+	    vk::KHRSpirv14ExtensionName,
+	    vk::KHRSynchronization2ExtensionName,
 	};
 
 	void init_window();
@@ -84,6 +90,20 @@ class VkEngine
 	void init_swap_image_views();
 
 	void init_graphics_pipeline();
+
+	void create_command_pool();
+
+	void create_command_buffer();
+
+	void record_command_buffer(uint32_t swapchain_image_idx) const;
+
+	void create_sync_objects();
+
+	void transition_imaga_layout(vk::Image image, vk::ImageLayout old_layout,
+	                             vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
+	                             vk::AccessFlags2        dst_access_mask,
+	                             vk::PipelineStageFlags2 src_stage_mask,
+	                             vk::PipelineStageFlags2 dst_stage_mask) const;
 
 	[[nodiscard]] vk::raii::ShaderModule create_shader_module(const std::vector<char> &code) const;
 };
