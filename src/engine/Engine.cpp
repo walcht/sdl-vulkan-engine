@@ -4,7 +4,6 @@
 #include <map>
 
 namespace vkengine {
-
 VkEngine::VkEngine(const std::string &title,
                    const std::string &app_identifier) {
   m_Title = title;
@@ -19,7 +18,7 @@ VkEngine::VkEngine(const std::string &title,
   init_swap_image_views();
   init_graphics_pipeline();
   create_command_pool();
-  create_command_buffer();
+  create_command_buffers();
   create_sync_objects();
 }
 
@@ -581,25 +580,23 @@ void VkEngine::create_command_pool() {
   m_GraphicsCmdPool = vk::raii::CommandPool(m_Device, cmd_pool_create_info);
 }
 
-void VkEngine::create_command_buffer() {
+void VkEngine::create_command_buffers() {
   vk::CommandBufferAllocateInfo cmd_buffer_allocate_info{
       .commandPool = m_GraphicsCmdPool,
       .level = vk::CommandBufferLevel::ePrimary,
-      .commandBufferCount = 1,
+      .commandBufferCount = MAX_NBR_FRAMES_IN_FLIGHT,
   };
-
-  /* transfer ownership of the create cmd buffer to the class cmd buffer handle.
-   * Remember that it makes no sense for cmd buffers to have copy assignment */
-  m_GraphicsCmdBuffer = std::move(
-      vk::raii::CommandBuffers(m_Device, cmd_buffer_allocate_info).front());
+  m_GraphicsCmdBuffers =
+      std::move(vk::raii::CommandBuffers(m_Device, cmd_buffer_allocate_info));
 }
 
-void VkEngine::record_command_buffer(uint32_t swapchain_image_idx) const {
-  m_GraphicsCmdBuffer.begin({});
+void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
+                                     uint32_t swapchain_image_idx) const {
+  cb.begin({});
 
   /* First, transition the swap chain image into an a layout suitable for color
    * attachment operations (i.e., shader writing to it, etc.). */
-  transition_imaga_layout(m_SwapChainImgs[swapchain_image_idx],
+  transition_imaga_layout(cb, m_SwapChainImgs[swapchain_image_idx],
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal, {},
                           vk::AccessFlagBits2::eColorAttachmentWrite,
@@ -631,60 +628,60 @@ void VkEngine::record_command_buffer(uint32_t swapchain_image_idx) const {
   { /* BEGIN RENDERING */
 
     /* then begin rendering (oof finally) */
-    m_GraphicsCmdBuffer.beginRendering(rendering_info);
+    cb.beginRendering(rendering_info);
 
     /* then bind the graphics pipeline */
-    m_GraphicsCmdBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                     m_Pipeline);
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, m_Pipeline);
 
     /* remember that we have set the viewport and its scissor as dynamic
      * pipeline variables hence why we need to specify them before issuing any
      * 'vkCmd' calls */
-    m_GraphicsCmdBuffer.setViewport(
-        0, vk::Viewport{
-               .x = 0.0f,
-               .y = 0.0f,
-               .width = static_cast<float>(m_SwapChainExtent.width),
-               .height = static_cast<float>(m_SwapChainExtent.height),
-               .minDepth = 0.0f,
-               .maxDepth = 1.0f,
-           });
-    m_GraphicsCmdBuffer.setScissor(0, vk::Rect2D{
-                                          .offset =
-                                              vk::Offset2D{
-                                                  .x = 0,
-                                                  .y = 0,
-                                              },
-                                          .extent = m_SwapChainExtent,
-                                      });
+    cb.setViewport(0,
+                   vk::Viewport{
+                       .x = 0.0f,
+                       .y = 0.0f,
+                       .width = static_cast<float>(m_SwapChainExtent.width),
+                       .height = static_cast<float>(m_SwapChainExtent.height),
+                       .minDepth = 0.0f,
+                       .maxDepth = 1.0f,
+                   });
+    cb.setScissor(0, vk::Rect2D{
+                         .offset =
+                             vk::Offset2D{
+                                 .x = 0,
+                                 .y = 0,
+                             },
+                         .extent = m_SwapChainExtent,
+                     });
 
     /* now we can finally use the drawing 'vkCmd' calls which will actually draw
      * stuff on the screen */
 
     { /* BEGIN DRAWING CMDS */
 
-      m_GraphicsCmdBuffer.draw(3, 1, 0, 0);
+      cb.draw(3, 1, 0, 0);
 
     } /* END DRAWING CMDS*/
 
-    m_GraphicsCmdBuffer.endRendering();
+    cb.endRendering();
 
   } /* END RENDERING */
 
   /* after rendering, transition the swapchain image back to a layout that is
    * optimal for presentation */
-  transition_imaga_layout(m_SwapChainImgs[swapchain_image_idx],
+  transition_imaga_layout(cb, m_SwapChainImgs[swapchain_image_idx],
                           vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
                           vk::AccessFlagBits2::eColorAttachmentWrite, {},
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eBottomOfPipe);
 
-  m_GraphicsCmdBuffer.end();
+  cb.end();
 }
 
 void VkEngine::transition_imaga_layout(
-    vk::Image image, vk::ImageLayout old_layout, vk::ImageLayout new_layout,
+    const vk::raii::CommandBuffer &cb, vk::Image image,
+    vk::ImageLayout old_layout, vk::ImageLayout new_layout,
     vk::AccessFlags2 src_access_mask, vk::AccessFlags2 dst_access_mask,
     vk::PipelineStageFlags2 src_stage_mask,
     vk::PipelineStageFlags2 dst_stage_mask) const {
@@ -728,18 +725,34 @@ void VkEngine::transition_imaga_layout(
       .pImageMemoryBarriers = &pipeline_barrier,
   };
 
-  m_GraphicsCmdBuffer.pipelineBarrier2(dependency_info);
+  cb.pipelineBarrier2(dependency_info);
 }
 
 void VkEngine::create_sync_objects() {
-  m_PresentCompleteSem =
-      vk::raii::Semaphore(m_Device, vk::SemaphoreCreateInfo{});
-  m_RenderFinishedSem =
-      vk::raii::Semaphore(m_Device, vk::SemaphoreCreateInfo{});
-  m_DrawFence =
-      vk::raii::Fence(m_Device, {
-                                    .flags = vk::FenceCreateFlagBits::eSignaled,
-                                });
+  m_RenderFinishedSems.clear();
+  m_PresentCompleteSems.clear();
+  m_DrawFences.clear();
+
+  /* For each swapchain image, we need to create seperate semaphores
+   * (semaphores sync operations within a queue).
+   *
+   * Why not MAX_NBR_FRAMES_IN_FLIGHT semaphores? You can think of the following
+   * scenario where we have 2 in-flight frames (MAX_NBR_FRAMES_IN_FLIGHT = 2)
+   * and 3 swapchain images that can be acquired. The third call to
+   * acquireNextImage may re-use some semaphores that are potentially still
+   * needed by another swapchain image. */
+  for (int i = 0; i < m_SwapChainImgs.size(); ++i) {
+    m_RenderFinishedSems.emplace_back(m_Device, vk::SemaphoreCreateInfo());
+    m_PresentCompleteSems.emplace_back(m_Device, vk::SemaphoreCreateInfo());
+  }
+
+  /* For each in-flight frame, we need to create seperate fences
+   * (fences sync operations between the host and the device) */
+  for (int i = 0; i < MAX_NBR_FRAMES_IN_FLIGHT; ++i) {
+    m_DrawFences.emplace_back(
+        m_Device,
+        vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+  }
 }
 
 [[nodiscard]] vk::raii::ShaderModule
@@ -753,58 +766,71 @@ VkEngine::create_shader_module(const std::vector<char> &code) const {
   return shader_module;
 }
 
-void VkEngine::draw_frame() const {
+void VkEngine::draw_frame() {
 
-  /* block the host (us - CPU) until all operations on the graphics queue are
-   * done. */
-  m_GraphicsQueue.waitIdle();
+  /* now wait for the previously submitted rendering cmds to finish (i.e., wait
+   * for draw fence to be signaled) */
+  while (vk::Result::eTimeout ==
+         m_Device.waitForFences(*m_DrawFences[m_CurrFrameIdx], vk::True,
+                                UINT64_MAX))
+    ;
 
-  /* acquire an available swap chain image to render to (of course - we have to
-   * make sure that this is NOT an image that is being rendered to).
+  /* Acquire an available swap chain image to render to (of course - we have to
+   * make sure that this is NOT an image that is currently being rendered to).
    *
-   * But why signal a semaphore you may askw - well, as per Vulkan
-   * specification:
+   * But why signal a semaphore you may ask - well, as per Vulkan specification:
    * "The presentation engine may not have finished reading from the image at
    * the time it is acquired, so the application must use semaphore and/or fence
    * to ensure that the image layout and contents are not modified until the
    * presentation engine reads have completed"
    * */
-  auto [result, img_idx] =
-      m_SwapChain.acquireNextImage(UINT64_MAX, *m_PresentCompleteSem, nullptr);
+  auto [result, img_idx] = m_SwapChain.acquireNextImage(
+      UINT64_MAX, *m_PresentCompleteSems[m_CurrSemphIdx], nullptr);
 
-  /* reset the drawing-finished fence */
-  m_Device.resetFences(*m_DrawFence);
+  /* reset the drawing-finished fence (if we don't do this, the fence will
+   * remain in a signaled state) */
+  m_Device.resetFences(*m_DrawFences[m_CurrFrameIdx]);
 
-  /* then record the rendering cmds */
-  record_command_buffer(img_idx);
+  /* then record the rendering cmds into the current command buffer */
+  m_GraphicsCmdBuffers[m_CurrFrameIdx].reset();
+  record_command_buffer(m_GraphicsCmdBuffers[m_CurrFrameIdx], img_idx);
 
-  /* then submit the previously recorded command buffer to the graphics queue.
+  /* Then submit the previously recorded command buffer to the graphics queue.
+   *
    * We wait for the presentation semaphore to be signaled before starting the
-   * execution of these cmds (i.e., before we start rendering) */
+   * execution of these cmds (i.e., before we start rendering). We have to wait
+   * for the presentation semaphore to be signaled because the presentation
+   * engine may still be reading from that acquired image (read comment above
+   * on acquireNextImage).
+   *
+   * We signal the render-finished semaphore because we want to wait on it
+   * before presenting the image (that is, we introduced a sync that states
+   * "rendering to the image has to be finished before presenting it". Read
+   * comment under on presentKHR).
+   * */
   vk::PipelineStageFlags wait_dst_stage_mask{
       vk::PipelineStageFlagBits::eColorAttachmentOutput};
   vk::SubmitInfo submit_info{
       .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &(*m_PresentCompleteSem),
+      .pWaitSemaphores = &(*m_PresentCompleteSems[m_CurrSemphIdx]),
       .pWaitDstStageMask = &wait_dst_stage_mask,
       .commandBufferCount = 1,
-      .pCommandBuffers = &(*m_GraphicsCmdBuffer),
+      .pCommandBuffers = &(*m_GraphicsCmdBuffers[m_CurrFrameIdx]),
       .signalSemaphoreCount = 1,
-      .pSignalSemaphores = &(*m_RenderFinishedSem),
+      .pSignalSemaphores = &(*m_RenderFinishedSems[img_idx]),
   };
-  m_GraphicsQueue.submit(submit_info, *m_DrawFence);
+  m_GraphicsQueue.submit(submit_info, *m_DrawFences[m_CurrFrameIdx]);
 
-  /* now wait for the previously submitted rendering cmds to finish (i.e., wait
-   * for draw fence to be signaled) */
-  while (vk::Result::eTimeout ==
-         m_Device.waitForFences(*m_DrawFence, vk::True, UINT64_MAX))
-    ;
-
-  /* after making sure that rendering has finished, we have to present the just
-   * rendered frame */
+  /* After making sure that rendering has finished, we have to present the just
+   * rendered frame.
+   *
+   * We wait on the render-finished semaphore to be signaled before we start
+   * presenting the image (otherwise we may start presenting an unfinished -
+   * not completely rendered - image. Or we may get an error. Just try it out).
+   * */
   vk::PresentInfoKHR present_info{
       .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &(*m_RenderFinishedSem),
+      .pWaitSemaphores = &(*m_RenderFinishedSems[img_idx]),
       .swapchainCount = 1,
       .pSwapchains = &(*m_SwapChain),
       .pImageIndices = &img_idx,
@@ -818,6 +844,8 @@ void VkEngine::draw_frame() const {
   default:
     break;
   }
+  m_CurrFrameIdx = (m_CurrFrameIdx + 1) % MAX_NBR_FRAMES_IN_FLIGHT;
+  m_CurrSemphIdx = (m_CurrSemphIdx + 1) % m_SwapChainImgs.size();
 }
 
 } // namespace vkengine

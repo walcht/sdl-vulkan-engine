@@ -10,102 +10,116 @@
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan_raii.hpp>
 
-namespace vkengine
-{
+namespace vkengine {
 
 /* Vulkan Engine wrapper - this holds all necessary Vulkan utilities for
  * rendering or compute purposes */
-class VkEngine
-{
-  public:
-	VkEngine() = delete;
-  void draw_frame() const;
+class VkEngine {
+public:
+  VkEngine() = delete;
+  void draw_frame();
 
-	/* engine takes ownership of the Vulkan instance */
-	VkEngine(const std::string &title, const std::string &app_identifier);
-	~VkEngine();
+  /* engine takes ownership of the Vulkan instance */
+  VkEngine(const std::string &title, const std::string &app_identifier);
+  ~VkEngine();
 
-  private:
-	std::string m_Title;
-	std::string m_AppIdentifier;
-	SDL_Window *m_Window = nullptr;
+public:
+  static constexpr int MAX_NBR_FRAMES_IN_FLIGHT = 2;
 
-	/* nullptr because constructors are deleted */
-	vk::raii::Instance       m_VkInstance         = nullptr;
-	vk::raii::PhysicalDevice m_PhysicalDevice     = nullptr;
-	vk::raii::Device         m_Device             = nullptr;
-	vk::raii::Queue          m_GraphicsQueue      = nullptr;
-	vk::raii::Queue          m_PresentQueue       = nullptr;
-	vk::raii::SurfaceKHR     m_VkSurface          = nullptr;
-	vk::raii::SwapchainKHR   m_SwapChain          = nullptr;
-	vk::raii::PipelineLayout m_PipelineLayout     = nullptr;
-	vk::raii::Pipeline       m_Pipeline           = nullptr;
-	vk::raii::CommandPool    m_GraphicsCmdPool    = nullptr;
-	vk::raii::CommandBuffer  m_GraphicsCmdBuffer  = nullptr;
-	vk::raii::Semaphore      m_PresentCompleteSem = nullptr;
-	vk::raii::Semaphore      m_RenderFinishedSem  = nullptr;
-	vk::raii::Fence          m_DrawFence          = nullptr;
+private:
+  std::string m_Title;
+  std::string m_AppIdentifier;
+  SDL_Window *m_Window = nullptr;
 
-	/* swapchain stuff */
-	std::vector<vk::Image>           m_SwapChainImgs;
-	std::vector<vk::raii::ImageView> m_SwapChainImgViews;
-	vk::Format                       m_SwapChainImgFormat{vk::Format::eUndefined};
-	vk::Extent2D                     m_SwapChainExtent;
+  /* nullptr because constructors are deleted */
+  vk::raii::Instance m_VkInstance = nullptr;
+  vk::raii::PhysicalDevice m_PhysicalDevice = nullptr;
+  vk::raii::Device m_Device = nullptr;
+  vk::raii::Queue m_GraphicsQueue = nullptr;
+  vk::raii::Queue m_PresentQueue = nullptr;
+  vk::raii::SurfaceKHR m_VkSurface = nullptr;
+  vk::raii::SwapchainKHR m_SwapChain = nullptr;
+  vk::raii::PipelineLayout m_PipelineLayout = nullptr;
+  vk::raii::Pipeline m_Pipeline = nullptr;
+  vk::raii::CommandPool m_GraphicsCmdPool = nullptr;
+  std::vector<vk::raii::CommandBuffer> m_GraphicsCmdBuffers;
+  std::vector<vk::raii::Semaphore> m_PresentCompleteSems;
+  std::vector<vk::raii::Semaphore> m_RenderFinishedSems;
+  std::vector<vk::raii::Fence> m_DrawFences;
 
-	uint32_t m_GraphicsQueueFamilyIdx;
-	uint32_t m_PresentQueueFamilyIdx;
+  /* swapchain stuff */
+  std::vector<vk::Image> m_SwapChainImgs;
+  std::vector<vk::raii::ImageView> m_SwapChainImgViews;
+  vk::Format m_SwapChainImgFormat{vk::Format::eUndefined};
+  vk::Extent2D m_SwapChainExtent;
 
-	const std::vector<const char *> m_RequiredDevExts = {
-	    vk::KHRSwapchainExtensionName,
-	    vk::KHRSpirv14ExtensionName,
-	    vk::KHRSynchronization2ExtensionName,
-	};
+  uint32_t m_GraphicsQueueFamilyIdx;
+  uint32_t m_PresentQueueFamilyIdx;
 
-	void init_window();
+  const std::vector<const char *> m_RequiredDevExts = {
+      vk::KHRSwapchainExtensionName,
+      vk::KHRSpirv14ExtensionName,
+      vk::KHRSynchronization2ExtensionName,
+  };
 
-	void init_surface();
+  /* index of current in-flight frame [0, MAX_NBR_FRAMES_IN_FLIGHT[ */
+  uint32_t m_CurrFrameIdx = 0;
 
-	/* */
-	void init_physical_device();
+  /* index of current semaphore [0, swapChainImgs.size()[ */
+  uint32_t m_CurrSemphIdx = 0;
 
-	/* */
-	void init_vkinstance();
+private:
+  void init_window();
 
-	void init_logical_device();
+  void init_surface();
 
-	void init_swap_chain();
+  /* */
+  void init_physical_device();
 
-	/* choose the most suitable format for the swapchain from a vector of
-	 * supported formats */
-	vk::SurfaceFormatKHR
-	    choose_swap_surface_format(const std::vector<vk::SurfaceFormatKHR> &surface_formats) const;
+  /* */
+  void init_vkinstance();
 
-	vk::PresentModeKHR
-	    choose_swap_present_mode(const std::vector<vk::PresentModeKHR> &present_modes) const;
+  void init_logical_device();
 
-	vk::Extent2D get_swap_extent(const vk::SurfaceCapabilitiesKHR &capabilities) const;
+  void init_swap_chain();
 
-	uint32_t choose_swap_min_img_count(vk::SurfaceCapabilitiesKHR surface_capabilities) const;
+  /* choose the most suitable format for the swapchain from a vector of
+   * supported formats */
+  vk::SurfaceFormatKHR choose_swap_surface_format(
+      const std::vector<vk::SurfaceFormatKHR> &surface_formats) const;
 
-	void init_swap_image_views();
+  vk::PresentModeKHR choose_swap_present_mode(
+      const std::vector<vk::PresentModeKHR> &present_modes) const;
 
-	void init_graphics_pipeline();
+  vk::Extent2D
+  get_swap_extent(const vk::SurfaceCapabilitiesKHR &capabilities) const;
 
-	void create_command_pool();
+  uint32_t choose_swap_min_img_count(
+      vk::SurfaceCapabilitiesKHR surface_capabilities) const;
 
-	void create_command_buffer();
+  void init_swap_image_views();
 
-	void record_command_buffer(uint32_t swapchain_image_idx) const;
+  void init_graphics_pipeline();
 
-	void create_sync_objects();
+  void create_command_pool();
 
-	void transition_imaga_layout(vk::Image image, vk::ImageLayout old_layout,
-	                             vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
-	                             vk::AccessFlags2        dst_access_mask,
-	                             vk::PipelineStageFlags2 src_stage_mask,
-	                             vk::PipelineStageFlags2 dst_stage_mask) const;
+  void create_command_buffers();
 
-	[[nodiscard]] vk::raii::ShaderModule create_shader_module(const std::vector<char> &code) const;
+  void record_command_buffer(const vk::raii::CommandBuffer &cb,
+                             uint32_t swapchain_image_idx) const;
+
+  void create_sync_objects();
+
+  void transition_imaga_layout(const vk::raii::CommandBuffer &cb,
+                               vk::Image image, vk::ImageLayout old_layout,
+                               vk::ImageLayout new_layout,
+                               vk::AccessFlags2 src_access_mask,
+                               vk::AccessFlags2 dst_access_mask,
+                               vk::PipelineStageFlags2 src_stage_mask,
+                               vk::PipelineStageFlags2 dst_stage_mask) const;
+
+  [[nodiscard]] vk::raii::ShaderModule
+  create_shader_module(const std::vector<char> &code) const;
 };
 
-}        // namespace vkengine
+} // namespace vkengine
