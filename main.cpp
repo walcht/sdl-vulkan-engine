@@ -76,6 +76,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) {
     return SDL_APP_SUCCESS; /* successfully exit the program */
   }
+  if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+    static_cast<AppState *>(appstate)->vkEnginePtr->is_window_resized = true;
+    return SDL_APP_CONTINUE;
+  }
   return SDL_APP_CONTINUE; /* continue the loop */
 }
 

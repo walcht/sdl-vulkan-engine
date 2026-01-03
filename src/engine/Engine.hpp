@@ -26,6 +26,11 @@ public:
 public:
   static constexpr int MAX_NBR_FRAMES_IN_FLIGHT = 2;
 
+  /* This should be set externally by whatever window manager library is used
+   * (e.g., SDL3). This is used because it is not guranteed that the GPU driver
+   * returns vk::Result::eErrorOutOfDateKHR upon acquireNextImage call */
+  bool is_window_resized = false;
+
 private:
   std::string m_Title;
   std::string m_AppIdentifier;
@@ -47,11 +52,17 @@ private:
   std::vector<vk::raii::Semaphore> m_RenderFinishedSems;
   std::vector<vk::raii::Fence> m_DrawFences;
 
-  /* swapchain stuff */
+  /***************************** SWAPCHAIN STUFF ******************************/
+
+  /* this is NOT a vk::raii::Image vector because the vk::raii::SwapchainKHR is
+   * the object owning the swapchain images and we are just copying their
+   * handles here */
   std::vector<vk::Image> m_SwapChainImgs;
   std::vector<vk::raii::ImageView> m_SwapChainImgViews;
   vk::Format m_SwapChainImgFormat{vk::Format::eUndefined};
   vk::Extent2D m_SwapChainExtent;
+
+  /****************************************************************************/
 
   uint32_t m_GraphicsQueueFamilyIdx;
   uint32_t m_PresentQueueFamilyIdx;
@@ -83,6 +94,10 @@ private:
 
   void init_swap_chain();
 
+  void cleanup_swap_chain();
+
+  void recreate_swap_chain();
+
   /* choose the most suitable format for the swapchain from a vector of
    * supported formats */
   vk::SurfaceFormatKHR choose_swap_surface_format(
@@ -110,8 +125,8 @@ private:
 
   void create_sync_objects();
 
-  void transition_imaga_layout(const vk::raii::CommandBuffer &cb,
-                               vk::Image image, vk::ImageLayout old_layout,
+  void transition_image_layout(vk::CommandBuffer cb, vk::Image image,
+                               vk::ImageLayout old_layout,
                                vk::ImageLayout new_layout,
                                vk::AccessFlags2 src_access_mask,
                                vk::AccessFlags2 dst_access_mask,

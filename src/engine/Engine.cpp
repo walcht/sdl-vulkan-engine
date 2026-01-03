@@ -35,7 +35,8 @@ void VkEngine::init_window() {
   }
 
   if ((m_Window = SDL_CreateWindow(m_Title.c_str(), 640, 480,
-                                   SDL_WINDOW_VULKAN)) == nullptr) {
+                                   SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE)) ==
+      nullptr) {
     throw std::runtime_error(
         std::format("SDL_CreateWindow failed. Reason: {}", SDL_GetError()));
   }
@@ -311,6 +312,13 @@ void VkEngine::init_logical_device() {
 }
 
 void VkEngine::init_swap_chain() {
+  /* make sure swapchain is uninitialized */
+  if (m_SwapChain.getDevice() != nullptr || !m_SwapChainImgs.empty() ||
+      !m_SwapChainImgViews.empty()) {
+    throw std::runtime_error(
+        "init_swap_chain should be called on an uninitialized swapchain");
+  }
+
   vk::SurfaceCapabilitiesKHR surface_capabilities =
       m_PhysicalDevice.getSurfaceCapabilitiesKHR(*m_VkSurface);
 
@@ -357,6 +365,25 @@ void VkEngine::init_swap_chain() {
   m_SwapChainImgs = m_SwapChain.getImages();
   m_SwapChainImgFormat = surface_format;
   m_SwapChainExtent = extent;
+}
+
+void VkEngine::cleanup_swap_chain() {
+  m_SwapChainImgs.clear();
+  m_SwapChainImgViews.clear();
+
+  /* or simply assign a nullptr to it (which invokes the move assignment and
+   * clears up the swapchain resources) */
+  m_SwapChain.clear();
+}
+
+void VkEngine::recreate_swap_chain() {
+  /* wait until GPU is not doing anymore work */
+  m_Device.waitIdle();
+
+  cleanup_swap_chain();
+
+  init_swap_chain();
+  init_swap_image_views();
 }
 
 vk::SurfaceFormatKHR VkEngine::choose_swap_surface_format(
@@ -425,9 +452,15 @@ uint32_t VkEngine::choose_swap_min_img_count(
 }
 
 void VkEngine::init_swap_image_views() {
-  if (m_SwapChainImgs.empty()) {
+  if (m_SwapChain.getDevice() == nullptr || m_SwapChainImgs.empty()) {
     throw std::runtime_error(
-        "cannot create swapchain image views out of empty images");
+        "cannot create swapchain image views out of uninitialized swapchain");
+  }
+
+  /* swapchain image views should be empty */
+  if (!m_SwapChainImgViews.empty()) {
+    throw std::runtime_error(
+        "init_swap_image_views should be called on an uninisialized swapchain");
   }
 
   vk::ImageViewCreateInfo imageViewCreateInfo{
@@ -596,7 +629,7 @@ void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
 
   /* First, transition the swap chain image into an a layout suitable for color
    * attachment operations (i.e., shader writing to it, etc.). */
-  transition_imaga_layout(cb, m_SwapChainImgs[swapchain_image_idx],
+  transition_image_layout(cb, m_SwapChainImgs[swapchain_image_idx],
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal, {},
                           vk::AccessFlagBits2::eColorAttachmentWrite,
@@ -669,7 +702,7 @@ void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
 
   /* after rendering, transition the swapchain image back to a layout that is
    * optimal for presentation */
-  transition_imaga_layout(cb, m_SwapChainImgs[swapchain_image_idx],
+  transition_image_layout(cb, m_SwapChainImgs[swapchain_image_idx],
                           vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
                           vk::AccessFlagBits2::eColorAttachmentWrite, {},
@@ -679,11 +712,10 @@ void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
   cb.end();
 }
 
-void VkEngine::transition_imaga_layout(
-    const vk::raii::CommandBuffer &cb, vk::Image image,
-    vk::ImageLayout old_layout, vk::ImageLayout new_layout,
-    vk::AccessFlags2 src_access_mask, vk::AccessFlags2 dst_access_mask,
-    vk::PipelineStageFlags2 src_stage_mask,
+void VkEngine::transition_image_layout(
+    vk::CommandBuffer cb, vk::Image image, vk::ImageLayout old_layout,
+    vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
+    vk::AccessFlags2 dst_access_mask, vk::PipelineStageFlags2 src_stage_mask,
     vk::PipelineStageFlags2 dst_stage_mask) const {
   /* To do so, we need to set up a pipeline barrier - ... a what? You have to
    * understand something crucial about command buffers in Vulkan - there is no
@@ -787,9 +819,16 @@ void VkEngine::draw_frame() {
   auto [result, img_idx] = m_SwapChain.acquireNextImage(
       UINT64_MAX, *m_PresentCompleteSems[m_CurrSemphIdx], nullptr);
 
-  /* reset the drawing-finished fence (if we don't do this, the fence will
-   * remain in a signaled state) */
-  m_Device.resetFences(*m_DrawFences[m_CurrFrameIdx]);
+  /* acquireNextImage may return in its Result that the swapchain is no longer
+   * compatible and it may need to be recreated (e.g., window resize) */
+  if (result == vk::Result::eErrorOutOfDateKHR) {
+    recreate_swap_chain();
+    return;
+  }
+
+  if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+    throw std::runtime_error("failed to acquire swapchain image");
+  }
 
   /* then record the rendering cmds into the current command buffer */
   m_GraphicsCmdBuffers[m_CurrFrameIdx].reset();
@@ -819,6 +858,10 @@ void VkEngine::draw_frame() {
       .signalSemaphoreCount = 1,
       .pSignalSemaphores = &(*m_RenderFinishedSems[img_idx]),
   };
+  /* reset the drawing-finished fence (if we don't do this, the fence will
+   * remain in a signaled state). To make your code more future-proof, make sure
+   * to reset the fence exactly before submiting the work that will signal it */
+  m_Device.resetFences(*m_DrawFences[m_CurrFrameIdx]);
   m_GraphicsQueue.submit(submit_info, *m_DrawFences[m_CurrFrameIdx]);
 
   /* After making sure that rendering has finished, we have to present the just
@@ -836,14 +879,15 @@ void VkEngine::draw_frame() {
       .pImageIndices = &img_idx,
   };
   result = m_GraphicsQueue.presentKHR(present_info);
-  switch (result) {
-  case vk::Result::eSuccess:
-    break;
-  case vk::Result::eSuboptimalKHR:
-    break;
-  default:
-    break;
+
+  if (result == vk::Result::eErrorOutOfDateKHR ||
+      result == vk::Result::eSuboptimalKHR || is_window_resized) {
+    is_window_resized = false;
+    recreate_swap_chain();
+  } else if (result != vk::Result::eSuccess) {
+    throw std::runtime_error("failed to present swapchain image");
   }
+
   m_CurrFrameIdx = (m_CurrFrameIdx + 1) % MAX_NBR_FRAMES_IN_FLIGHT;
   m_CurrSemphIdx = (m_CurrSemphIdx + 1) % m_SwapChainImgs.size();
 }
