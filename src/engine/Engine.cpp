@@ -1,6 +1,6 @@
 #include "Engine.hpp"
 #include "Utils.hpp"
-#include "vulkan/vulkan.hpp"
+#include <algorithm>
 #include <map>
 
 namespace vkengine {
@@ -18,6 +18,7 @@ VkEngine::VkEngine(const std::string &title,
   init_swap_image_views();
   init_graphics_pipeline();
   create_command_pool();
+  create_vertex_buffer();
   create_command_buffers();
   create_sync_objects();
 }
@@ -509,9 +510,13 @@ void VkEngine::init_graphics_pipeline() {
   vk::PipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info,
                                                        frag_shader_stage_info};
 
-  /* keep the vertex input state to default because we are hardcoding the
-   * vertices */
-  vk::PipelineVertexInputStateCreateInfo vertex_input_state_info;
+  auto vertex_binding_desc = Vertex::get_binding_description();
+  auto vertex_attributes_desc = Vertex::get_attribute_descriptions();
+  vk::PipelineVertexInputStateCreateInfo vertex_input_state_info{
+      .vertexBindingDescriptionCount = 1,
+      .pVertexBindingDescriptions = &vertex_binding_desc,
+      .vertexAttributeDescriptionCount = vertex_attributes_desc.size(),
+      .pVertexAttributeDescriptions = vertex_attributes_desc.data()};
 
   vk::PipelineInputAssemblyStateCreateInfo input_assembly_create_info{
       .topology = vk::PrimitiveTopology::eTriangleList,
@@ -613,6 +618,76 @@ void VkEngine::create_command_pool() {
   m_GraphicsCmdPool = vk::raii::CommandPool(m_Device, cmd_pool_create_info);
 }
 
+uint32_t VkEngine::find_memory_type(uint32_t mem_type_bitmask,
+                                    vk::MemoryPropertyFlags properties) const {
+  vk::PhysicalDeviceMemoryProperties mem_props{
+      m_PhysicalDevice.getMemoryProperties()};
+  for (uint32_t i{0}; i < mem_props.memoryTypeCount; ++i) {
+    if (is_bit_set(mem_type_bitmask, i) &&
+        is_all_bits_set(mem_props.memoryTypes[i].propertyFlags, properties)) {
+      return i;
+    }
+  }
+  throw std::runtime_error("failed to find required memory type");
+}
+
+void VkEngine::create_vertex_buffer() {
+  /* a vertex buffer is backed by a buffer (duh?). Create the buffer with
+   * required size and set usage flags accordingly */
+  vk::BufferCreateInfo buffer_info{
+      .size = sizeof(TEST_TRIANGLE_VERTICES[0]) * TEST_TRIANGLE_VERTICES.size(),
+      .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+      /* eExclusive because the buffer is NOT shared between multiple queues
+       * (i.e., here it is used exclusively whithin the graphics queue) */
+      .sharingMode = vk::SharingMode::eExclusive,
+
+  };
+  m_VertexBuff = vk::raii::Buffer(m_Device, buffer_info);
+
+  /* The buffer was created but is still NOT backed by any memory (i.e., the
+   * acutal memory that will hold the data has not been yet allocated).
+   *
+   * To create the backing memory, we need to first fetch its requirements from
+   * the VkBuffer object we have just created (and other requirements - see
+   * below) */
+  vk::MemoryRequirements mem_requirements{m_VertexBuff.getMemoryRequirements()};
+  uint32_t mem_type_idx =
+      find_memory_type(mem_requirements.memoryTypeBits,
+                       vk::MemoryPropertyFlagBits::eHostVisible |
+                           vk::MemoryPropertyFlagBits::eHostCoherent);
+  vk::MemoryAllocateInfo mem_alloc_info{
+      /* could be != buffer_info.size */
+      .allocationSize = mem_requirements.size,
+      .memoryTypeIndex = mem_type_idx,
+  };
+  m_VertexBuffMemory = vk::raii::DeviceMemory(m_Device, mem_alloc_info);
+
+  /* The memory is now successfully created but is still not bound to the
+   * VkBuffer object we have created earlier (i.e., we haven't done anything
+   * yet in regards to backing the VkBuffer with memory). The memoryOffset is 0
+   * because this memory is specifically allocated for this vertex buffer (i.e.,
+   * if we wanted to back multiple vertex buffers with a single VkDeviceMemory
+   * then we would need to supply offsets for the VkBuffer objects) */
+  m_VertexBuff.bindMemory(m_VertexBuffMemory, 0);
+
+  {
+    /* Now we need to copy the actual data to the allocated VkDeviceMemory.
+     * Before doing so, we need to map the memory to host (i.e., CPU) accessible
+     * memory */
+    void *data_ptr = m_VertexBuffMemory.mapMemory(0, vk::WholeSize);
+
+    /* Finally, copy the data (this does NOT mean that after this instruction
+     * the data is copied on the GPU - CPU => GPU copying happens in the
+     * background and here we are just copying data from CPU memory => CPU
+     * memory and also triggering the CPU => GPU copy) */
+    std::memcpy(data_ptr, TEST_TRIANGLE_VERTICES.data(), buffer_info.size);
+
+    /* don't forget to unmap this - keep this mapped only incase you are
+     * potentially at least a copy each frame to this data */
+    m_VertexBuffMemory.unmapMemory();
+  }
+}
+
 void VkEngine::create_command_buffers() {
   vk::CommandBufferAllocateInfo cmd_buffer_allocate_info{
       .commandPool = m_GraphicsCmdPool,
@@ -692,6 +767,9 @@ void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
 
     { /* BEGIN DRAWING CMDS */
 
+      cb.bindVertexBuffers(
+          0, *m_VertexBuff,
+          {0} /* offsets are NOT in bytes rather in set stride unit */);
       cb.draw(3, 1, 0, 0);
 
     } /* END DRAWING CMDS*/
