@@ -18,6 +18,7 @@ VkEngine::VkEngine(const std::string &title,
   init_swap_image_views();
   init_graphics_pipeline();
   create_command_pool();
+  create_index_buffer();
   create_vertex_buffer();
   create_command_buffers();
   create_sync_objects();
@@ -671,7 +672,7 @@ void VkEngine::copy_buffer(vk::raii::Buffer &src, vk::raii::Buffer &dst,
 
 void VkEngine::create_vertex_buffer() {
   vk::DeviceSize buff_size =
-      sizeof(TEST_TRIANGLE_VERTICES[0]) * TEST_TRIANGLE_VERTICES.size();
+      sizeof(TEST_RECTANGLE_VERTICES[0]) * TEST_RECTANGLE_VERTICES.size();
 
   /* Create the host-visible (temporary?) staging buffer and its backing memory.
    * Notice in the usage flags that will be used as the source for a memory
@@ -690,7 +691,7 @@ void VkEngine::create_vertex_buffer() {
     /* Before doing so, we need to map the memory to host (i.e., CPU) accessible
      * memory */
     void *staging_data_ptr = staging_memory.mapMemory(0, vk::WholeSize);
-    std::memcpy(staging_data_ptr, TEST_TRIANGLE_VERTICES.data(), buff_size);
+    std::memcpy(staging_data_ptr, TEST_RECTANGLE_VERTICES.data(), buff_size);
 
     /* don't forget to unmap this - keep this mapped only incase you are
      * potentially at least a copy each frame to this data */
@@ -708,6 +709,32 @@ void VkEngine::create_vertex_buffer() {
                 m_VertexBuffMemory);
 
   copy_buffer(staging_buff, m_VertexBuff, buff_size);
+}
+
+void VkEngine::create_index_buffer() {
+  vk::DeviceSize buff_size =
+      sizeof(TEST_RECTANGLE_INDICES[0]) * TEST_RECTANGLE_INDICES.size();
+
+  vk::raii::Buffer staging_buff{nullptr};
+  vk::raii::DeviceMemory staging_memory{nullptr};
+  create_buffer(m_PhysicalDevice, m_Device, buff_size,
+                vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent,
+                staging_buff, staging_memory);
+  {
+    void *staging_data_ptr = staging_memory.mapMemory(0, vk::WholeSize);
+    std::memcpy(staging_data_ptr, TEST_RECTANGLE_INDICES.data(), buff_size);
+    staging_memory.unmapMemory();
+  }
+
+  create_buffer(m_PhysicalDevice, m_Device, buff_size,
+                vk::BufferUsageFlagBits::eIndexBuffer |
+                    vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eDeviceLocal, m_IndexBuff,
+                m_IndexBuffMemory);
+
+  copy_buffer(staging_buff, m_IndexBuff, buff_size);
 }
 
 void VkEngine::create_command_buffers() {
@@ -792,7 +819,8 @@ void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
       cb.bindVertexBuffers(
           0, *m_VertexBuff,
           {0} /* offsets are NOT in bytes rather in set stride unit */);
-      cb.draw(3, 1, 0, 0);
+      cb.bindIndexBuffer(*m_IndexBuff, 0, vk::IndexType::eUint16);
+      cb.drawIndexed(TEST_RECTANGLE_INDICES.size(), 1, 0, 0, 0);
 
     } /* END DRAWING CMDS*/
 

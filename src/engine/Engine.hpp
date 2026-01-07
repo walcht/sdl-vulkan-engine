@@ -103,6 +103,8 @@ private:
 
   void create_vertex_buffer();
 
+  void create_index_buffer();
+
   void create_command_buffers();
 
   void record_command_buffer(const vk::raii::CommandBuffer &cb,
@@ -178,6 +180,8 @@ private:
 
   vk::raii::Buffer m_VertexBuff{nullptr};
   vk::raii::DeviceMemory m_VertexBuffMemory{nullptr};
+  vk::raii::Buffer m_IndexBuff{nullptr};
+  vk::raii::DeviceMemory m_IndexBuffMemory{nullptr};
 
   /****************************************************************************/
 
@@ -220,10 +224,17 @@ private:
   /********************* CONST DATA FOR TESTING PURPOSES **********************/
 
   /* Vertex triangle data (for testing purposes) */
-  const std::vector<Vertex> TEST_TRIANGLE_VERTICES{
-      {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+  const std::vector<Vertex> TEST_RECTANGLE_VERTICES{
+      {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+  };
+
+  const std::vector<uint16_t> TEST_RECTANGLE_INDICES{
+      0, 1, 2, /* triangle 0 */
+      2, 3, 0, /* triangle 1 */
+  };
 
   /****************************************************************************/
 };
