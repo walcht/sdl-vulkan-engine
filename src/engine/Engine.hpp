@@ -121,11 +121,18 @@ private:
   [[nodiscard]] vk::raii::ShaderModule
   create_shader_module(const std::vector<char> &code) const;
 
-  uint32_t find_memory_type(uint32_t mem_type_filter,
-                            vk::MemoryPropertyFlags properties) const;
+  /* copies data from source buffer to destination buffer on the device (i.e.,
+   * data copy operation is performed using a vkCmdCopyBuffer call).
+   *
+   * A command buffer is spawned, the vkCmdCopyBuffer call is recorded, the
+   * execution of the command buffer is waited upon. */
+  void copy_buffer(vk::raii::Buffer &src, vk::raii::Buffer &dst,
+                   vk::DeviceSize size);
 
-  /* Returns true if the corresponding bit index is set in the provided bitfield
-   */
+  /****************************** STATIC UTILS ********************************/
+
+  /* Returns true if the corresponding bit index is set in the provided
+   * bitfield. */
   template <std::unsigned_integral T, std::unsigned_integral P>
   static inline bool is_bit_set(T bitfield, P bit_idx) {
     return bitfield & (1 << bit_idx);
@@ -135,6 +142,20 @@ private:
   static inline bool is_all_bits_set(T bitfield, P bitmask) {
     return (bitfield & bitmask) == bitmask;
   }
+
+  static void create_buffer(vk::raii::PhysicalDevice const &physical_device,
+                            vk::raii::Device const &device, vk::DeviceSize size,
+                            vk::BufferUsageFlags usage_flags,
+                            vk::MemoryPropertyFlags mem_props,
+                            vk::raii::Buffer &buffer,
+                            vk::raii::DeviceMemory &dev_mem);
+
+  static uint32_t
+  find_memory_type(vk::raii::PhysicalDevice const &physical_device,
+                   uint32_t mem_type_filter,
+                   vk::MemoryPropertyFlags properties);
+
+  /****************************************************************************/
 
 private:
   std::string m_Title;

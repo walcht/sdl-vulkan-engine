@@ -618,12 +618,14 @@ void VkEngine::create_command_pool() {
   m_GraphicsCmdPool = vk::raii::CommandPool(m_Device, cmd_pool_create_info);
 }
 
-uint32_t VkEngine::find_memory_type(uint32_t mem_type_bitmask,
-                                    vk::MemoryPropertyFlags properties) const {
+uint32_t
+VkEngine::find_memory_type(vk::raii::PhysicalDevice const &physical_device,
+                           uint32_t mem_type_bitmask,
+                           vk::MemoryPropertyFlags properties) {
   vk::PhysicalDeviceMemoryProperties mem_props{
-      m_PhysicalDevice.getMemoryProperties()};
+      physical_device.getMemoryProperties()};
   for (uint32_t i{0}; i < mem_props.memoryTypeCount; ++i) {
-    if (is_bit_set(mem_type_bitmask, i) &&
+    if (VkEngine::is_bit_set(mem_type_bitmask, i) &&
         is_all_bits_set(mem_props.memoryTypes[i].propertyFlags, properties)) {
       return i;
     }
@@ -631,61 +633,81 @@ uint32_t VkEngine::find_memory_type(uint32_t mem_type_bitmask,
   throw std::runtime_error("failed to find required memory type");
 }
 
-void VkEngine::create_vertex_buffer() {
-  /* a vertex buffer is backed by a buffer (duh?). Create the buffer with
-   * required size and set usage flags accordingly */
-  vk::BufferCreateInfo buffer_info{
-      .size = sizeof(TEST_TRIANGLE_VERTICES[0]) * TEST_TRIANGLE_VERTICES.size(),
-      .usage = vk::BufferUsageFlagBits::eVertexBuffer,
-      /* eExclusive because the buffer is NOT shared between multiple queues
-       * (i.e., here it is used exclusively whithin the graphics queue) */
-      .sharingMode = vk::SharingMode::eExclusive,
-
+void VkEngine::copy_buffer(vk::raii::Buffer &src, vk::raii::Buffer &dst,
+                           vk::DeviceSize size) {
+  vk::CommandBufferAllocateInfo info{
+      .commandPool = m_GraphicsCmdPool,
+      .level = vk::CommandBufferLevel::ePrimary,
+      .commandBufferCount = 1,
   };
-  m_VertexBuff = vk::raii::Buffer(m_Device, buffer_info);
+  vk::raii::CommandBuffer cb =
+      std::move(m_Device.allocateCommandBuffers(info).front());
 
-  /* The buffer was created but is still NOT backed by any memory (i.e., the
-   * acutal memory that will hold the data has not been yet allocated).
-   *
-   * To create the backing memory, we need to first fetch its requirements from
-   * the VkBuffer object we have just created (and other requirements - see
-   * below) */
-  vk::MemoryRequirements mem_requirements{m_VertexBuff.getMemoryRequirements()};
-  uint32_t mem_type_idx =
-      find_memory_type(mem_requirements.memoryTypeBits,
-                       vk::MemoryPropertyFlagBits::eHostVisible |
-                           vk::MemoryPropertyFlagBits::eHostCoherent);
-  vk::MemoryAllocateInfo mem_alloc_info{
-      /* could be != buffer_info.size */
-      .allocationSize = mem_requirements.size,
-      .memoryTypeIndex = mem_type_idx,
-  };
-  m_VertexBuffMemory = vk::raii::DeviceMemory(m_Device, mem_alloc_info);
-
-  /* The memory is now successfully created but is still not bound to the
-   * VkBuffer object we have created earlier (i.e., we haven't done anything
-   * yet in regards to backing the VkBuffer with memory). The memoryOffset is 0
-   * because this memory is specifically allocated for this vertex buffer (i.e.,
-   * if we wanted to back multiple vertex buffers with a single VkDeviceMemory
-   * then we would need to supply offsets for the VkBuffer objects) */
-  m_VertexBuff.bindMemory(m_VertexBuffMemory, 0);
-
+  /* Immediately start recording the command buffer */
   {
-    /* Now we need to copy the actual data to the allocated VkDeviceMemory.
-     * Before doing so, we need to map the memory to host (i.e., CPU) accessible
-     * memory */
-    void *data_ptr = m_VertexBuffMemory.mapMemory(0, vk::WholeSize);
+    /* The eOneTimeSubmit tells the driver that this cb is only used once. This
+     * might potentially result in optimizations. */
+    cb.begin(vk::CommandBufferBeginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    });
 
-    /* Finally, copy the data (this does NOT mean that after this instruction
-     * the data is copied on the GPU - CPU => GPU copying happens in the
-     * background and here we are just copying data from CPU memory => CPU
-     * memory and also triggering the CPU => GPU copy) */
-    std::memcpy(data_ptr, TEST_TRIANGLE_VERTICES.data(), buffer_info.size);
+    cb.copyBuffer(src, dst, vk::BufferCopy(0, 0, size));
+
+    cb.end();
+  }
+
+  /* Now submit the cb and wait for it to finish */
+  m_GraphicsQueue.submit(
+      vk::SubmitInfo{
+          .commandBufferCount = 1,
+          .pCommandBuffers = &*cb,
+      },
+      nullptr);
+
+  /* We could have used a fence here which will allow us to schedule multiple
+   * transfer cmds simultaneously and wait on all of them. */
+  m_GraphicsQueue.waitIdle();
+}
+
+void VkEngine::create_vertex_buffer() {
+  vk::DeviceSize buff_size =
+      sizeof(TEST_TRIANGLE_VERTICES[0]) * TEST_TRIANGLE_VERTICES.size();
+
+  /* Create the host-visible (temporary?) staging buffer and its backing memory.
+   * Notice in the usage flags that will be used as the source for a memory
+   * transfer operation which is from this staging buffer (source) to the actual
+   * vertex buffer that is in device-memory (or at least device-visible) */
+  vk::raii::Buffer staging_buff{nullptr};
+  vk::raii::DeviceMemory staging_memory{nullptr};
+  create_buffer(m_PhysicalDevice, m_Device, buff_size,
+                vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent,
+                staging_buff, staging_memory);
+  /* Copy data from CPU memory (RAM) to the just-created staging buffer memory
+   * (which is probably on RAM - idk for sure) */
+  {
+    /* Before doing so, we need to map the memory to host (i.e., CPU) accessible
+     * memory */
+    void *staging_data_ptr = staging_memory.mapMemory(0, vk::WholeSize);
+    std::memcpy(staging_data_ptr, TEST_TRIANGLE_VERTICES.data(), buff_size);
 
     /* don't forget to unmap this - keep this mapped only incase you are
      * potentially at least a copy each frame to this data */
-    m_VertexBuffMemory.unmapMemory();
+    staging_memory.unmapMemory();
   }
+
+  /* Now we create the device-visible (more performant) buffer and its backing
+   * memory. Notice in the flags that this will be used as a vertex buffer AND
+   * as a transfer destination for some memory transfer operation which is
+   * from the previously created staging buffer to this in-GPU-memory buffer. */
+  create_buffer(m_PhysicalDevice, m_Device, buff_size,
+                vk::BufferUsageFlagBits::eVertexBuffer |
+                    vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eDeviceLocal, m_VertexBuff,
+                m_VertexBuffMemory);
+
+  copy_buffer(staging_buff, m_VertexBuff, buff_size);
 }
 
 void VkEngine::create_command_buffers() {
@@ -968,6 +990,50 @@ void VkEngine::draw_frame() {
 
   m_CurrFrameIdx = (m_CurrFrameIdx + 1) % MAX_NBR_FRAMES_IN_FLIGHT;
   m_CurrSemphIdx = (m_CurrSemphIdx + 1) % m_SwapChainImgs.size();
+}
+
+void VkEngine::create_buffer(vk::raii::PhysicalDevice const &physical_device,
+                             vk::raii::Device const &device,
+                             vk::DeviceSize size,
+                             vk::BufferUsageFlags usage_flags,
+                             vk::MemoryPropertyFlags mem_props,
+                             vk::raii::Buffer &buffer,
+                             vk::raii::DeviceMemory &dev_mem) {
+  /* a vertex buffer is backed by a buffer (duh?). Create the buffer with
+   * required size and set usage flags accordingly */
+  vk::BufferCreateInfo buffer_info{
+      .size = size,
+      .usage = usage_flags,
+      /* eExclusive because the buffer is NOT shared between multiple queues
+       * (i.e., here it is used exclusively whithin the graphics queue) */
+      .sharingMode = vk::SharingMode::eExclusive,
+
+  };
+  buffer = vk::raii::Buffer(device, buffer_info);
+
+  /* The buffer was created but is still NOT backed by any memory (i.e., the
+   * acutal memory that will hold the data has not been yet allocated).
+   *
+   * To create the backing memory, we need to first fetch its requirements from
+   * the VkBuffer object we have just created (and other requirements - see
+   * below) */
+  vk::MemoryRequirements mem_requirements{buffer.getMemoryRequirements()};
+  uint32_t mem_type_idx = find_memory_type(
+      physical_device, mem_requirements.memoryTypeBits, mem_props);
+  vk::MemoryAllocateInfo mem_alloc_info{
+      /* could be != buffer_info.size */
+      .allocationSize = mem_requirements.size,
+      .memoryTypeIndex = mem_type_idx,
+  };
+  dev_mem = vk::raii::DeviceMemory(device, mem_alloc_info);
+
+  /* The memory is now successfully created but is still not bound to the
+   * VkBuffer object we have created earlier (i.e., we haven't done anything
+   * yet in regards to backing the VkBuffer with memory). The memoryOffset is 0
+   * because this memory is specifically allocated for this vertex buffer (i.e.,
+   * if we wanted to back multiple vertex buffers with a single VkDeviceMemory
+   * then we would need to supply offsets for the VkBuffer objects) */
+  buffer.bindMemory(dev_mem, 0);
 }
 
 } // namespace vkengine
