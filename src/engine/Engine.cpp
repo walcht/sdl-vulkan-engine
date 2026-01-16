@@ -1,6 +1,7 @@
 #include "Engine.hpp"
 #include "Utils.hpp"
 #include <algorithm>
+#include <glm/gtc/matrix_transform.hpp>
 #include <map>
 
 namespace vkengine {
@@ -16,10 +17,14 @@ VkEngine::VkEngine(const std::string &title,
   init_logical_device();
   init_swap_chain();
   init_swap_image_views();
+  init_descriptor_set_layouts();
   init_graphics_pipeline();
   create_command_pool();
   create_index_buffer();
   create_vertex_buffer();
+  create_uniform_buffers();
+  create_descriptor_pool();
+  create_descriptor_sets();
   create_command_buffers();
   create_sync_objects();
 }
@@ -488,6 +493,21 @@ void VkEngine::init_swap_image_views() {
   }
 }
 
+void VkEngine::init_descriptor_set_layouts() {
+  vk::DescriptorSetLayoutBinding mvp_layout_binding{
+      .binding = 0,
+      .descriptorType = vk::DescriptorType::eUniformBuffer,
+      .descriptorCount = 1,
+      .stageFlags = vk::ShaderStageFlagBits::eVertex,
+      .pImmutableSamplers = nullptr,
+  };
+  vk::DescriptorSetLayoutCreateInfo layout_info{
+      .bindingCount = 1,
+      .pBindings = &mvp_layout_binding,
+  };
+  m_DesriptorSetLayout = vk::raii::DescriptorSetLayout(m_Device, layout_info);
+}
+
 void VkEngine::init_graphics_pipeline() {
   /* a shader module is a thin wrapper around shader code which may contain
    * multiple entry points */
@@ -545,7 +565,7 @@ void VkEngine::init_graphics_pipeline() {
       .rasterizerDiscardEnable = vk::False,
       .polygonMode = vk::PolygonMode::eFill,
       .cullMode = vk::CullModeFlagBits::eBack,
-      .frontFace = vk::FrontFace::eClockwise,
+      .frontFace = vk::FrontFace::eCounterClockwise,
       .depthBiasEnable = vk::False,
       .depthBiasSlopeFactor = 1.0f,
       .lineWidth = 1.0f,
@@ -574,7 +594,8 @@ void VkEngine::init_graphics_pipeline() {
 
   /* pipeline layout (for shader uniforms, push constants, etc.) */
   vk::PipelineLayoutCreateInfo pipeline_layout_create_info{
-      .setLayoutCount = 0,
+      .setLayoutCount = 1,
+      .pSetLayouts = &*m_DesriptorSetLayout,
       .pushConstantRangeCount = 0,
   };
 
@@ -737,6 +758,103 @@ void VkEngine::create_index_buffer() {
   copy_buffer(staging_buff, m_IndexBuff, buff_size);
 }
 
+void VkEngine::create_uniform_buffers() {
+  m_UniformBuffers.clear();
+  m_UniformBufferMemories.clear();
+  m_UniformBufferMaps.clear();
+
+  for (size_t i{0}; i < MAX_NBR_FRAMES_IN_FLIGHT; ++i) {
+    vk::DeviceSize buff_size{sizeof(MVP)};
+    vk::raii::Buffer buff({});
+    vk::raii::DeviceMemory buff_mem({});
+    create_buffer(m_PhysicalDevice, m_Device, buff_size,
+                  vk::BufferUsageFlagBits::eUniformBuffer,
+                  vk::MemoryPropertyFlagBits::eHostVisible |
+                      vk::MemoryPropertyFlagBits::eHostCoherent,
+                  buff, buff_mem);
+    m_UniformBuffers.emplace_back(std::move(buff));
+    m_UniformBufferMemories.emplace_back(std::move(buff_mem));
+    /* keep the memories persistently mapped (i.e., use persistent mapping
+     * technique) since we are expected to update the memory every frame */
+    m_UniformBufferMaps.emplace_back(
+        m_UniformBufferMemories[i].mapMemory(0, buff_size));
+  }
+}
+
+void VkEngine::update_mvp(uint32_t curr_frame) {
+  static auto start_time{std::chrono::high_resolution_clock::now()};
+
+  auto current_time{std::chrono::high_resolution_clock::now()};
+  auto delta{std::chrono::duration<float, std::chrono::seconds::period>(
+                 current_time - start_time)
+                 .count()};
+
+  MVP mvp{
+      .model = glm::rotate(glm::mat4(1.0f), delta * glm::radians(90.0f),
+                           glm::vec3(0.0f, 0.0f, 1.0f)),
+      .view =
+          glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                      glm::vec3(0.0f, 0.0f, 1.0f)),
+      .proj = glm::perspective(glm::radians(45.0f),
+                               static_cast<float>(m_SwapChainExtent.width) /
+                                   static_cast<float>(m_SwapChainExtent.height),
+                               0.1f, 10.f),
+  };
+
+  /* flip Y coordinates because glm is designed for OpenGL and not Vulkan */
+  mvp.proj[1][1] *= -1;
+
+  /* then copy the mvp struct to the actual uniform buffer memory */
+  std::memcpy(m_UniformBufferMaps[curr_frame], &mvp, sizeof(mvp));
+}
+
+void VkEngine::create_descriptor_pool() {
+  vk::DescriptorPoolSize pool_size{
+      .type = vk::DescriptorType::eUniformBuffer,
+      .descriptorCount = MAX_NBR_FRAMES_IN_FLIGHT,
+  };
+
+  vk::DescriptorPoolCreateInfo pool_create_info{
+      .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+      .maxSets = MAX_NBR_FRAMES_IN_FLIGHT, /* a set foreach in-flight frame */
+      .poolSizeCount = 1,
+      .pPoolSizes = &pool_size,
+  };
+
+  m_DesriptorPool = vk::raii::DescriptorPool(m_Device, pool_create_info);
+}
+
+void VkEngine::create_descriptor_sets() {
+  std::vector<vk::DescriptorSetLayout> layouts(MAX_NBR_FRAMES_IN_FLIGHT,
+                                               *m_DesriptorSetLayout);
+  vk::DescriptorSetAllocateInfo alloc_info{
+      .descriptorPool = m_DesriptorPool,
+      .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+      .pSetLayouts = layouts.data(),
+  };
+
+  m_DescriptorSets = m_Device.allocateDescriptorSets(alloc_info);
+
+  for (size_t i{0}; i < MAX_NBR_FRAMES_IN_FLIGHT; ++i) {
+    vk::DescriptorBufferInfo buffer_info{
+        .buffer = m_UniformBuffers[i],
+        .offset = 0,
+        .range = sizeof(MVP),
+    };
+
+    vk::WriteDescriptorSet descriptor_write{
+        .dstSet = m_DescriptorSets[i],
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .pBufferInfo = &buffer_info,
+    };
+
+    m_Device.updateDescriptorSets(descriptor_write, {});
+  }
+}
+
 void VkEngine::create_command_buffers() {
   vk::CommandBufferAllocateInfo cmd_buffer_allocate_info{
       .commandPool = m_GraphicsCmdPool,
@@ -747,8 +865,9 @@ void VkEngine::create_command_buffers() {
       std::move(vk::raii::CommandBuffers(m_Device, cmd_buffer_allocate_info));
 }
 
-void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
+void VkEngine::record_command_buffer(uint32_t curr_frame_idx,
                                      uint32_t swapchain_image_idx) const {
+  vk::raii::CommandBuffer const &cb = m_GraphicsCmdBuffers[curr_frame_idx];
   cb.begin({});
 
   /* First, transition the swap chain image into an a layout suitable for color
@@ -820,6 +939,8 @@ void VkEngine::record_command_buffer(const vk::raii::CommandBuffer &cb,
           0, *m_VertexBuff,
           {0} /* offsets are NOT in bytes rather in set stride unit */);
       cb.bindIndexBuffer(*m_IndexBuff, 0, vk::IndexType::eUint16);
+      cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_PipelineLayout,
+                            0, *m_DescriptorSets[curr_frame_idx], nullptr);
       cb.drawIndexed(TEST_RECTANGLE_INDICES.size(), 1, 0, 0, 0);
 
     } /* END DRAWING CMDS*/
@@ -958,9 +1079,12 @@ void VkEngine::draw_frame() {
     throw std::runtime_error("failed to acquire swapchain image");
   }
 
+  /* update MVP projection matrix */
+  update_mvp(m_CurrFrameIdx);
+
   /* then record the rendering cmds into the current command buffer */
   m_GraphicsCmdBuffers[m_CurrFrameIdx].reset();
-  record_command_buffer(m_GraphicsCmdBuffers[m_CurrFrameIdx], img_idx);
+  record_command_buffer(m_CurrFrameIdx, img_idx);
 
   /* Then submit the previously recorded command buffer to the graphics queue.
    *

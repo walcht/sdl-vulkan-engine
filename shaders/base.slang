@@ -1,31 +1,34 @@
-/*
-static float2 positions[3] = float2[](
-  float2(0.0, -0.5),
-  float2(0.5, 0.5),
-  float2(-0.5, 0.5)
-);
-
-static float3 colors[3] = float3[](
-  float3(1.0, 0.0, 0.0),
-  float3(0.0, 1.0, 0.0),
-  float3(0.0, 0.0, 1.0)
-);
-*/
-
+//////////////////////////////////////////
+// ATTRIBUTES
+//////////////////////////////////////////
 struct VertexInput {
-  float2 position;
+  float2 pos;
   float3 color;
 }
 
 struct VertexOutput {
+  float4 pos : SV_Position;
   float3 color;
-  float4 sv_position : SV_Position;
 };
+
+//////////////////////////////////////////
+// DESCRIPTOR RESOURCES
+//////////////////////////////////////////
+struct UniformBuffer {
+  float4x4  model;
+  float4x4  view;
+  float4x4  proj;
+};
+ConstantBuffer<UniformBuffer> mvp;
+
+//////////////////////////////////////////
+// PUSH CONSTANTS
+//////////////////////////////////////////
 
 [shader("vertex")]
 VertexOutput vert_main(VertexInput i) {
   VertexOutput o;
-  o.sv_position = float4(i.position, 0.0, 1.0);
+  o.pos = mul(mvp.proj, mul(mvp.view, mul(mvp.model, float4(i.pos, 0.0, 1.0))));
   o.color = i.color;
   return o;
 }

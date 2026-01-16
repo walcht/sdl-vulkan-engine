@@ -1,5 +1,8 @@
 #pragma once
 
+/* Vulkan strcut alignments - does NOT work for nested structs! */
+#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+
 /* make VulkanHpp function calls accept structure parameters directly (easier
  * to map to the original Vulkan C API) */
 #include <concepts>
@@ -41,6 +44,12 @@ struct Vertex {
                                             .offset = offsetof(Vertex, color)},
     };
   }
+};
+
+struct MVP {
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 proj;
 };
 
 /* Vulkan Engine wrapper - this holds all necessary Vulkan utilities for
@@ -97,6 +106,8 @@ private:
 
   void init_swap_image_views();
 
+  void init_descriptor_set_layouts();
+
   void init_graphics_pipeline();
 
   void create_command_pool();
@@ -105,9 +116,11 @@ private:
 
   void create_index_buffer();
 
+  void create_uniform_buffers();
+
   void create_command_buffers();
 
-  void record_command_buffer(const vk::raii::CommandBuffer &cb,
+  void record_command_buffer(uint32_t curr_frame_idx,
                              uint32_t swapchain_image_idx) const;
 
   void create_sync_objects();
@@ -130,6 +143,12 @@ private:
    * execution of the command buffer is waited upon. */
   void copy_buffer(vk::raii::Buffer &src, vk::raii::Buffer &dst,
                    vk::DeviceSize size);
+
+  void update_mvp(uint32_t curr_frame);
+
+  void create_descriptor_pool();
+
+  void create_descriptor_sets();
 
   /****************************** STATIC UTILS ********************************/
 
@@ -190,6 +209,17 @@ private:
   std::vector<vk::raii::Semaphore> m_PresentCompleteSems;
   std::vector<vk::raii::Semaphore> m_RenderFinishedSems;
   std::vector<vk::raii::Fence> m_DrawFences;
+
+  /****************************************************************************/
+
+  /***************************** DESCRIPTOR SETS ******************************/
+
+  vk::raii::DescriptorPool m_DesriptorPool{nullptr};
+  vk::raii::DescriptorSetLayout m_DesriptorSetLayout{nullptr};
+  std::vector<vk::raii::DescriptorSet> m_DescriptorSets;
+  std::vector<vk::raii::Buffer> m_UniformBuffers;
+  std::vector<vk::raii::DeviceMemory> m_UniformBufferMemories;
+  std::vector<void *> m_UniformBufferMaps;
 
   /****************************************************************************/
 
