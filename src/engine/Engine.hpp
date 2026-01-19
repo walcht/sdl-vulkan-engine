@@ -119,6 +119,12 @@ private:
 
   void create_texture_image(std::string_view filename);
 
+  void create_texture_image_view();
+
+  void create_texture_sampler();
+
+  vk::raii::ImageView create_image_view(vk::Image img, vk::Format format);
+
   void create_vertex_buffer();
 
   void create_index_buffer();
@@ -251,6 +257,8 @@ private:
 
   vk::raii::Image m_TextureImg{nullptr};
   vk::raii::DeviceMemory m_TextureImgMemory{nullptr};
+  vk::raii::ImageView m_TextureImgView{nullptr};
+  vk::raii::Sampler m_TextureSampler{nullptr};
 
   /****************************************************************************/
 

@@ -2,7 +2,6 @@
 #include "Utils.hpp"
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
-#include <iostream>
 #include <map>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -26,6 +25,8 @@ VkEngine::VkEngine(const std::string &title,
   init_graphics_pipeline();
   create_command_pool();
   create_texture_image("textures/test.png");
+  create_texture_image_view();
+  create_texture_sampler();
   create_index_buffer();
   create_vertex_buffer();
   create_uniform_buffers();
@@ -153,6 +154,11 @@ void VkEngine::init_physical_device() {
 
     /* geometry shader support is crucial */
     if (!deviceFeats.geometryShader) {
+      continue;
+    }
+
+    /* anisotropy sampling support is crucial */
+    if (!deviceFeats.samplerAnisotropy) {
       continue;
     }
 
@@ -292,7 +298,7 @@ void VkEngine::init_logical_device() {
                      vk::PhysicalDeviceVulkan13Features,
                      vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
       feature_chain{
-          {},
+          {.features = {.samplerAnisotropy = true}},
           {.shaderDrawParameters = true},
           {.synchronization2 = true, .dynamicRendering = true},
           {.extendedDynamicState = true},
@@ -476,26 +482,9 @@ void VkEngine::init_swap_image_views() {
         "init_swap_image_views should be called on an uninisialized swapchain");
   }
 
-  vk::ImageViewCreateInfo imageViewCreateInfo{
-      .viewType = vk::ImageViewType::e2D,
-      .format = m_SwapChainImgFormat,
-      .components =
-          {
-              .r = vk::ComponentSwizzle::eIdentity,
-              .g = vk::ComponentSwizzle::eIdentity,
-              .b = vk::ComponentSwizzle::eIdentity,
-              .a = vk::ComponentSwizzle::eIdentity,
-          },
-      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
-                           .baseMipLevel = 0,
-                           .levelCount = 1,
-                           .baseArrayLayer = 0,
-                           .layerCount = 1},
-  };
-
-  for (const auto &img : m_SwapChainImgs) {
-    imageViewCreateInfo.image = img;
-    m_SwapChainImgViews.emplace_back(m_Device, imageViewCreateInfo);
+  for (size_t i{0}; i < m_SwapChainImgs.size(); ++i) {
+    m_SwapChainImgViews.push_back(
+        create_image_view(m_SwapChainImgs[i], m_SwapChainImgFormat));
   }
 }
 
@@ -723,6 +712,51 @@ void VkEngine::create_texture_image(std::string_view filename) {
    * reading operations */
   transition_image_layout(m_TextureImg, vk::ImageLayout::eTransferDstOptimal,
                           vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+vk::raii::ImageView VkEngine::create_image_view(vk::Image img,
+                                                vk::Format format) {
+  vk::ImageViewCreateInfo view_create_info{
+      .image = img,
+      .viewType = vk::ImageViewType::e2D,
+      .format = format,
+      .components =
+          {
+              .r = vk::ComponentSwizzle::eIdentity,
+              .g = vk::ComponentSwizzle::eIdentity,
+              .b = vk::ComponentSwizzle::eIdentity,
+              .a = vk::ComponentSwizzle::eIdentity,
+          },
+      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                           .baseMipLevel = 0,
+                           .levelCount = 1,
+                           .baseArrayLayer = 0,
+                           .layerCount = 1},
+  };
+  return vk::raii::ImageView(m_Device, view_create_info);
+}
+
+void VkEngine::create_texture_image_view() {
+  m_TextureImgView = create_image_view(m_TextureImg, vk::Format::eR8G8B8A8Srgb);
+}
+
+void VkEngine::create_texture_sampler() {
+  vk::PhysicalDeviceProperties props = m_PhysicalDevice.getProperties();
+  vk::SamplerCreateInfo create_info{
+      .magFilter = vk::Filter::eLinear,
+      .minFilter = vk::Filter::eLinear,
+      .mipmapMode = vk::SamplerMipmapMode::eLinear,
+      .addressModeU = vk::SamplerAddressMode::eRepeat,
+      .addressModeV = vk::SamplerAddressMode::eRepeat,
+      .addressModeW = vk::SamplerAddressMode::eRepeat,
+      .mipLodBias = 0.0f,
+      .anisotropyEnable = vk::True,
+      /* maximum quality. TODO: make this configurable */
+      .maxAnisotropy = props.limits.maxSamplerAnisotropy,
+      .compareEnable = vk::False,
+      .compareOp = vk::CompareOp::eAlways,
+  };
+  m_TextureSampler = vk::raii::Sampler(m_Device, create_info);
 }
 
 uint32_t
