@@ -43,6 +43,10 @@ set(SHADERS_IN_DIR ${CMAKE_SOURCE_DIR}/shaders)
 set(SHADERS_OUT_DIR ${CMAKE_BINARY_DIR}/shaders)
 set(SLANGC_EXECUTABLE "slangc")
 
+if (NOT EXISTS ${SHADER_OUT_DIR})
+  file(MAKE_DIRECTORY ${SHADERS_OUT_DIR})
+endif()
+
 # ugly cmake stuff ...
 function (add_slang_shader_target TARGET)
   cmake_parse_arguments("SHADER" "" "" "SOURCES" ${ARGN})
@@ -88,3 +92,14 @@ target_link_libraries(
   ${PROJECT_NAME} PRIVATE
     VkEngine::VkEngine
 )
+
+################################################################################
+## COPY TEXTURES
+################################################################################
+
+message("copying textures to ${CMAKE_BINARY_DIR}/textures ...")
+add_custom_command(
+  TARGET  ${PROJECT_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/textures
+          ${CMAKE_BINARY_DIR}/textures)

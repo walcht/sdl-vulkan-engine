@@ -35,12 +35,30 @@ find_package(Vulkan REQUIRED)
 ################################################################################
 include(FetchContent)
 # SDL3 core - for creating a Vulkan context
-FetchContent_Declare(
+fetchcontent_declare(
   SDL3
   GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
   GIT_TAG a8589a84226a6202831a3d49ff4edda4acab9acd # v3.2.24
 )
-FetchContent_MakeAvailable(SDL3)
+fetchcontent_makeavailable(SDL3)
+
+
+# fetch stb_image.h in case it is not already available at external/stb/
+# this is a bit ugly since we have to fetch the entire repo for a single file
+# but this is the only method that works (that I know of)
+set(STB_DIR ${CMAKE_SOURCE_DIR}/external/stb)
+if (NOT EXISTS ${STB_DIR}/stb_image.h)
+  message("fetching stb git repository for stb_image.h dependency ...")
+  if (NOT EXISTS ${STB_DIR})
+    file(MAKE_DIRECTORY ${STB_DIR})
+    file(DOWNLOAD https://github.com/nothings/stb/archive/refs/heads/master.zip
+      ${STB_DIR}/stb.zip SHOW_PROGRESS)
+    file(ARCHIVE_EXTRACT INPUT ${STB_DIR}/stb.zip DESTINATION ${STB_DIR})
+    file(COPY ${STB_DIR}/stb-master/stb_image.h DESTINATION ${STB_DIR})
+    file(REMOVE_RECURSE ${STB_DIR}/stb-master ${STB_DIR}/stb.zip)
+  endif()
+  message("stb_image.h available at ${STB_DIR}/external/stb/stb_image.h")
+endif()
 
 # GLM - graphics-related mathematics library
 #CPMAddPackage("gh:g-truc/glm@1.0.1")
@@ -76,6 +94,7 @@ target_include_directories(VkEngine
     ${CMAKE_CURRENT_LIST_DIR}/
   PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/engine/
+    ${CMAKE_SOURCE_DIR}/external/
 )
 
 

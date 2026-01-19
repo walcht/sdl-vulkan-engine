@@ -15,3 +15,22 @@ Optionally add `-DCMAKE_EXPORT_COMPILE_COMMANDS=1 ` to generate the
 ```bash
 cp build/compile_commands.json .
 ```
+
+## Project Structure
+
+```
+.
+├── build       -> build files
+├── doc         -> auto-generated docs
+├── external    -> external dependencies (e.g., stb)
+├── include     -> public engine headers
+├── shaders     -> engine shaders
+├── src         -> engine implementation + private headers
+│   ├── engine  -> engine core
+│   └── gui     -> gui (Qt)
+└── test        -> tests
+```
+
+## License
+
+MIT License. Read License.txt

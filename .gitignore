@@ -59,3 +59,6 @@ CMakeUserPresets.json
 
 # SPIRV compiled shader files
 *.spv
+
+external/**
+!external/.gitkeep

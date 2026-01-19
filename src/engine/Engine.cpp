@@ -2,7 +2,12 @@
 #include "Utils.hpp"
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
+#include <iostream>
 #include <map>
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#include <stb/stb_image.h>
 
 namespace vkengine {
 VkEngine::VkEngine(const std::string &title,
@@ -20,6 +25,7 @@ VkEngine::VkEngine(const std::string &title,
   init_descriptor_set_layouts();
   init_graphics_pipeline();
   create_command_pool();
+  create_texture_image("textures/test.png");
   create_index_buffer();
   create_vertex_buffer();
   create_uniform_buffers();
@@ -640,6 +646,85 @@ void VkEngine::create_command_pool() {
   m_GraphicsCmdPool = vk::raii::CommandPool(m_Device, cmd_pool_create_info);
 }
 
+void VkEngine::create_image(uint32_t width, uint32_t height, vk::Format format,
+                            vk::ImageTiling tiling,
+                            vk::ImageUsageFlags usage_flags,
+                            vk::MemoryPropertyFlags mem_property_flags,
+                            vk::raii::Image &img,
+                            vk::raii::DeviceMemory &img_memory) {
+  vk::ImageCreateInfo img_info{
+      .imageType = vk::ImageType::e2D,
+      .format = format,
+      .extent =
+          {
+              .width = width,
+              .height = height,
+              .depth = 1,
+          },
+      .mipLevels = 1,
+      .arrayLayers = 1,
+      .samples = vk::SampleCountFlagBits::e1, /* no multisampling */
+      .tiling = tiling,
+      .usage = usage_flags,
+      .sharingMode = vk::SharingMode::eExclusive,
+  };
+
+  img = vk::raii::Image(m_Device, img_info);
+
+  vk::MemoryRequirements mem_reqs = img.getMemoryRequirements();
+  vk::MemoryAllocateInfo alloc_info{
+      .allocationSize = mem_reqs.size,
+      .memoryTypeIndex = find_memory_type(
+          m_PhysicalDevice, mem_reqs.memoryTypeBits, mem_property_flags)};
+  img_memory = vk::raii::DeviceMemory(m_Device, alloc_info);
+  img.bindMemory(img_memory, 0);
+}
+
+void VkEngine::create_texture_image(std::string_view filename) {
+  int width, height, nbr_channels;
+  stbi_uc *img_data = stbi_load(filename.data(), &width, &height, &nbr_channels,
+                                STBI_rgb_alpha /* RGBA */);
+  if (!img_data)
+    throw std::runtime_error("failed to load texture image");
+
+  vk::DeviceSize img_size = width * height * 4;
+
+  vk::raii::Buffer img_staging_buff{nullptr};
+  vk::raii::DeviceMemory img_memory{nullptr};
+  create_buffer(m_PhysicalDevice, m_Device, img_size,
+                vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostCoherent, img_staging_buff,
+                img_memory);
+
+  /* copy loaded image data into the staging buffer */
+  void *dst_data_ptr = img_memory.mapMemory(0, img_size);
+  std::memcpy(dst_data_ptr, img_data, img_size);
+  img_memory.unmapMemory();
+
+  /* TODO: potential resource leak if code above throws an exception */
+  stbi_image_free(img_data);
+
+  create_image(
+      width, height, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+      vk::MemoryPropertyFlagBits::eDeviceLocal, m_TextureImg,
+      m_TextureImgMemory);
+
+  /* now transition the image to a layout that is optimal for it to be written
+   * to as the destination for a transfer operation */
+  transition_image_layout(m_TextureImg, vk::ImageLayout::eUndefined,
+                          vk::ImageLayout::eTransferDstOptimal);
+
+  copy_buffer_to_image(img_staging_buff, m_TextureImg,
+                       static_cast<uint32_t>(width),
+                       static_cast<uint32_t>(height));
+
+  /* then transition it again to a layout that is optimal for fragment shader
+   * reading operations */
+  transition_image_layout(m_TextureImg, vk::ImageLayout::eTransferDstOptimal,
+                          vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
 uint32_t
 VkEngine::find_memory_type(vk::raii::PhysicalDevice const &physical_device,
                            uint32_t mem_type_bitmask,
@@ -657,38 +742,14 @@ VkEngine::find_memory_type(vk::raii::PhysicalDevice const &physical_device,
 
 void VkEngine::copy_buffer(vk::raii::Buffer &src, vk::raii::Buffer &dst,
                            vk::DeviceSize size) {
-  vk::CommandBufferAllocateInfo info{
-      .commandPool = m_GraphicsCmdPool,
-      .level = vk::CommandBufferLevel::ePrimary,
-      .commandBufferCount = 1,
-  };
-  vk::raii::CommandBuffer cb =
-      std::move(m_Device.allocateCommandBuffers(info).front());
 
-  /* Immediately start recording the command buffer */
+  vk::raii::CommandBuffer cb{begin_single_time_cmds()};
+
   {
-    /* The eOneTimeSubmit tells the driver that this cb is only used once. This
-     * might potentially result in optimizations. */
-    cb.begin(vk::CommandBufferBeginInfo{
-        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-    });
-
     cb.copyBuffer(src, dst, vk::BufferCopy(0, 0, size));
-
-    cb.end();
   }
 
-  /* Now submit the cb and wait for it to finish */
-  m_GraphicsQueue.submit(
-      vk::SubmitInfo{
-          .commandBufferCount = 1,
-          .pCommandBuffers = &*cb,
-      },
-      nullptr);
-
-  /* We could have used a fence here which will allow us to schedule multiple
-   * transfer cmds simultaneously and wait on all of them. */
-  m_GraphicsQueue.waitIdle();
+  end_single_time_cmds(cb);
 }
 
 void VkEngine::create_vertex_buffer() {
@@ -855,6 +916,125 @@ void VkEngine::create_descriptor_sets() {
   }
 }
 
+vk::raii::CommandBuffer VkEngine::begin_single_time_cmds() {
+  vk::CommandBufferAllocateInfo alloc_info{
+      .commandPool = m_GraphicsCmdPool,
+      .level = vk::CommandBufferLevel::ePrimary,
+      .commandBufferCount = 1,
+  };
+
+  vk::raii::CommandBuffer cb{
+      std::move(m_Device.allocateCommandBuffers(alloc_info).front())};
+
+  /* The eOneTimeSubmit tells the driver that this cb is only used once. This
+   * might potentially result in optimizations. */
+  vk::CommandBufferBeginInfo begin_info{
+      .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+  };
+  cb.begin(begin_info);
+
+  return cb;
+}
+
+void VkEngine::end_single_time_cmds(vk::raii::CommandBuffer &cb) {
+  /* end recording of commands */
+  cb.end();
+
+  /* submit the cb synchronously (i.e., wait for it to finish) */
+  m_GraphicsQueue.submit(
+      vk::SubmitInfo{
+          .commandBufferCount = 1,
+          .pCommandBuffers = &*cb,
+      },
+      nullptr);
+
+  /* We could have used a fence here which will allow us to schedule multiple
+   * transfer cmds simultaneously and wait on all of them. */
+  m_GraphicsQueue.waitIdle();
+}
+
+void VkEngine::transition_image_layout(vk::raii::Image const &img,
+                                       vk::ImageLayout from_layout,
+                                       vk::ImageLayout to_layout) {
+  vk::raii::CommandBuffer cb{begin_single_time_cmds()};
+  {
+    vk::ImageMemoryBarrier barrier{
+        .oldLayout = from_layout,
+        .newLayout = to_layout,
+        .image = img,
+        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                             .baseMipLevel = 0,
+                             .levelCount = 1,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1},
+    };
+
+    vk::PipelineStageFlags src_stage;
+    vk::PipelineStageFlags dst_stage;
+
+    /* undefined -> anything: "anything" does not have to wait on anything */
+    if (from_layout == vk::ImageLayout::eUndefined /* don't care layout */ &&
+        to_layout == vk::ImageLayout::eTransferDstOptimal) {
+      barrier.srcAccessMask = {};
+      barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+      src_stage = vk::PipelineStageFlagBits::eTopOfPipe;
+      dst_stage = vk::PipelineStageFlagBits::eTransfer;
+    }
+    /* transfer dst -> shader read: shader reads in the fragment shader SHOULD
+     * wait on transfer writes */
+    else if (from_layout == vk::ImageLayout::eTransferDstOptimal &&
+             to_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+      barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+      barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+      src_stage = vk::PipelineStageFlagBits::eTransfer;
+      dst_stage = vk::PipelineStageFlagBits::eFragmentShader;
+    } else {
+      throw std::invalid_argument("unsupported image layout transition");
+    }
+    cb.pipelineBarrier(src_stage, dst_stage, {}, {}, nullptr, barrier);
+  }
+  end_single_time_cmds(cb);
+}
+
+void VkEngine::copy_buffer_to_image(vk::raii::Buffer const &buff,
+                                    vk::raii::Image const &img, uint32_t width,
+                                    uint32_t height) {
+  vk::raii::CommandBuffer cb{begin_single_time_cmds()};
+  {
+    vk::BufferImageCopy region{
+        .bufferOffset = 0,
+        .bufferRowLength = 0,   /* 0 means tightly-packed pixels */
+        .bufferImageHeight = 0, /* 0 means tightly-packed pixels */
+        /* to which subresource of the image we want to copy the data to */
+        .imageSubresource =
+            {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        /* at which offset of the image we want to copy the data to */
+        .imageOffset =
+            {
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            },
+        /* which subregions/extent of the image we want to copy the data to */
+        .imageExtent =
+            {
+                .width = width,
+                .height = height,
+                .depth = 1,
+            },
+    };
+    /* we assume that the image's layout is set to transfer dst optimal */
+    cb.copyBufferToImage(buff, img, vk::ImageLayout::eTransferDstOptimal,
+                         {region});
+  }
+  end_single_time_cmds(cb);
+}
+
 void VkEngine::create_command_buffers() {
   vk::CommandBufferAllocateInfo cmd_buffer_allocate_info{
       .commandPool = m_GraphicsCmdPool,
@@ -872,12 +1052,48 @@ void VkEngine::record_command_buffer(uint32_t curr_frame_idx,
 
   /* First, transition the swap chain image into an a layout suitable for color
    * attachment operations (i.e., shader writing to it, etc.). */
-  transition_image_layout(cb, m_SwapChainImgs[swapchain_image_idx],
-                          vk::ImageLayout::eUndefined,
-                          vk::ImageLayout::eColorAttachmentOptimal, {},
-                          vk::AccessFlagBits2::eColorAttachmentWrite,
-                          vk::PipelineStageFlagBits2::eTopOfPipe,
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+  {
+    /* To do so, we need to set up a pipeline barrier - ... a what? You have to
+     * understand something crucial about command buffers in Vulkan - there is
+     * no gurantee whatsoever about the order in which they are going to be
+     * executed. This means that if you record commands A->B->C the driver may
+     * or may not execute these cmds in that submission order.
+     *
+     * It is your job, as a Vulkan application developer, to explecitely set
+     * synchronization mechanisms to ensure a particular executaion order
+     * whithin a subset of the recorded cmds.
+     *
+     * Now back to image layout transition, it is crucial for the layout
+     * transition to occur BEFORE any cmds that will write to that image (think
+     * of draw cmds).
+     * */
+    vk::ImageMemoryBarrier2 pipeline_barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+        .srcAccessMask = {},
+        .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = m_SwapChainImgs[swapchain_image_idx],
+        .subresourceRange =
+            {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+    };
+
+    vk::DependencyInfo dependency_info{
+        .dependencyFlags = {},
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &pipeline_barrier,
+    };
+    cb.pipelineBarrier2(dependency_info);
+  }
 
   /* Then, setup the rendering info; which area to render to, which image view
    * to use for rendering, which clear color, which operations to perform before
@@ -951,62 +1167,36 @@ void VkEngine::record_command_buffer(uint32_t curr_frame_idx,
 
   /* after rendering, transition the swapchain image back to a layout that is
    * optimal for presentation */
-  transition_image_layout(cb, m_SwapChainImgs[swapchain_image_idx],
-                          vk::ImageLayout::eColorAttachmentOptimal,
-                          vk::ImageLayout::ePresentSrcKHR,
-                          vk::AccessFlagBits2::eColorAttachmentWrite, {},
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                          vk::PipelineStageFlagBits2::eBottomOfPipe);
+  {
+    vk::ImageMemoryBarrier2 pipeline_barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
+        .dstAccessMask = {},
+        .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .newLayout = vk::ImageLayout::ePresentSrcKHR,
+        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+        .image = m_SwapChainImgs[swapchain_image_idx],
+        .subresourceRange =
+            {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+    };
+
+    vk::DependencyInfo dependency_info{
+        .dependencyFlags = {},
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &pipeline_barrier,
+    };
+    cb.pipelineBarrier2(dependency_info);
+  }
 
   cb.end();
-}
-
-void VkEngine::transition_image_layout(
-    vk::CommandBuffer cb, vk::Image image, vk::ImageLayout old_layout,
-    vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
-    vk::AccessFlags2 dst_access_mask, vk::PipelineStageFlags2 src_stage_mask,
-    vk::PipelineStageFlags2 dst_stage_mask) const {
-  /* To do so, we need to set up a pipeline barrier - ... a what? You have to
-   * understand something crucial about command buffers in Vulkan - there is no
-   * gurantee whatsoever about the order in which they are going to be executed.
-   * This means that if you record commands A->B->C the driver may or may not
-   * execute these cmds in that submission order.
-   *
-   * It is your job, as a Vulkan application developer, to explecitely set
-   * synchronization mechanisms to ensure a particular executaion order whithin
-   * a subset of the recorded cmds.
-   *
-   * Now back to image layout transition, it is crucial for the layout
-   * transition to occur BEFORE any cmds that will write to that image (think of
-   * draw cmds).
-   * */
-  vk::ImageMemoryBarrier2 pipeline_barrier{
-      .srcStageMask = src_stage_mask,
-      .srcAccessMask = src_access_mask,
-      .dstStageMask = dst_stage_mask,
-      .dstAccessMask = dst_access_mask,
-      .oldLayout = old_layout,
-      .newLayout = new_layout,
-      .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-      .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-      .image = image,
-      .subresourceRange =
-          {
-              .aspectMask = vk::ImageAspectFlagBits::eColor,
-              .baseMipLevel = 0,
-              .levelCount = 1,
-              .baseArrayLayer = 0,
-              .layerCount = 1,
-          },
-  };
-
-  vk::DependencyInfo dependency_info{
-      .dependencyFlags = {},
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers = &pipeline_barrier,
-  };
-
-  cb.pipelineBarrier2(dependency_info);
 }
 
 void VkEngine::create_sync_objects() {

@@ -112,6 +112,13 @@ private:
 
   void create_command_pool();
 
+  void create_image(uint32_t width, uint32_t height, vk::Format format,
+                    vk::ImageTiling tiling, vk::ImageUsageFlags usage_flags,
+                    vk::MemoryPropertyFlags mem_property_flags,
+                    vk::raii::Image &img, vk::raii::DeviceMemory &img_memory);
+
+  void create_texture_image(std::string_view filename);
+
   void create_vertex_buffer();
 
   void create_index_buffer();
@@ -124,14 +131,6 @@ private:
                              uint32_t swapchain_image_idx) const;
 
   void create_sync_objects();
-
-  void transition_image_layout(vk::CommandBuffer cb, vk::Image image,
-                               vk::ImageLayout old_layout,
-                               vk::ImageLayout new_layout,
-                               vk::AccessFlags2 src_access_mask,
-                               vk::AccessFlags2 dst_access_mask,
-                               vk::PipelineStageFlags2 src_stage_mask,
-                               vk::PipelineStageFlags2 dst_stage_mask) const;
 
   [[nodiscard]] vk::raii::ShaderModule
   create_shader_module(const std::vector<char> &code) const;
@@ -149,6 +148,18 @@ private:
   void create_descriptor_pool();
 
   void create_descriptor_sets();
+
+  vk::raii::CommandBuffer begin_single_time_cmds();
+
+  void end_single_time_cmds(vk::raii::CommandBuffer &cb);
+
+  void transition_image_layout(vk::raii::Image const &img,
+                               vk::ImageLayout from_layout,
+                               vk::ImageLayout to_layout);
+
+  void copy_buffer_to_image(vk::raii::Buffer const &buff,
+                            vk::raii::Image const &img, uint32_t width,
+                            uint32_t height);
 
   /****************************** STATIC UTILS ********************************/
 
@@ -233,6 +244,13 @@ private:
   std::vector<vk::raii::ImageView> m_SwapChainImgViews;
   vk::Format m_SwapChainImgFormat{vk::Format::eUndefined};
   vk::Extent2D m_SwapChainExtent;
+
+  /****************************************************************************/
+
+  /************************* IMAGES & RELATED SHIT ****************************/
+
+  vk::raii::Image m_TextureImg{nullptr};
+  vk::raii::DeviceMemory m_TextureImgMemory{nullptr};
 
   /****************************************************************************/
 
