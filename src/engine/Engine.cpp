@@ -24,6 +24,7 @@ VkEngine::VkEngine(const std::string &title,
   init_descriptor_set_layouts();
   init_graphics_pipeline();
   create_command_pool();
+  create_depth_buffer_resources();
   create_texture_image("textures/test.png");
   create_texture_image_view();
   create_texture_sampler();
@@ -396,6 +397,8 @@ void VkEngine::cleanup_swap_chain() {
 }
 
 void VkEngine::recreate_swap_chain() {
+  /* TODO: check if width or height are null and react accordingly */
+
   /* wait until GPU is not doing anymore work */
   m_Device.waitIdle();
 
@@ -403,6 +406,7 @@ void VkEngine::recreate_swap_chain() {
 
   init_swap_chain();
   init_swap_image_views();
+  create_depth_buffer_resources();
 }
 
 vk::SurfaceFormatKHR VkEngine::choose_swap_surface_format(
@@ -484,7 +488,8 @@ void VkEngine::init_swap_image_views() {
 
   for (size_t i{0}; i < m_SwapChainImgs.size(); ++i) {
     m_SwapChainImgViews.push_back(
-        create_image_view(m_SwapChainImgs[i], m_SwapChainImgFormat));
+        create_image_view(m_SwapChainImgs[i], m_SwapChainImgFormat,
+                          vk::ImageAspectFlagBits::eColor));
   }
 }
 
@@ -611,30 +616,47 @@ void VkEngine::init_graphics_pipeline() {
   m_PipelineLayout =
       vk::raii::PipelineLayout(m_Device, pipeline_layout_create_info);
 
-  /* avoid creating render pass objects and use dynamic rendering (Vk >= 1.3) */
-  vk::PipelineRenderingCreateInfo pipeline_rendering_create_info{
-      .colorAttachmentCount = 1,
-      .pColorAttachmentFormats = &m_SwapChainImgFormat,
+  /* depth buffer + stencil */
+  vk::PipelineDepthStencilStateCreateInfo depth_stencil_info{
+      .depthTestEnable = vk::True,
+      .depthWriteEnable = vk::True,
+      .depthCompareOp = vk::CompareOp::eLess,
+      .depthBoundsTestEnable = vk::False,
+      .stencilTestEnable = vk::False,
   };
 
-  /* graphics pipeline creation struct - finally :-) */
-  vk::GraphicsPipelineCreateInfo pipeline_info{
-      .pNext = &pipeline_rendering_create_info,
-      .stageCount = 2,
-      .pStages = shader_stages,
-      .pVertexInputState = &vertex_input_state_info,
-      .pInputAssemblyState = &input_assembly_create_info,
-      .pViewportState = &viewport_state,
-      .pRasterizationState = &rasterizer,
-      .pMultisampleState = &multisampling,
-      .pColorBlendState = &color_blending,
-      .pDynamicState = &dynamic_state_create_info,
-      .layout = m_PipelineLayout,
-      .renderPass = nullptr,
-  };
+  /* graphics pipeline creation chain structs - finally :-) */
+  vk::StructureChain<vk::GraphicsPipelineCreateInfo,
+                     vk::PipelineRenderingCreateInfo>
+      pipeline_create_info_chain = {
+          {
+              .stageCount = 2,
+              .pStages = shader_stages,
+              .pVertexInputState = &vertex_input_state_info,
+              .pInputAssemblyState = &input_assembly_create_info,
+              .pViewportState = &viewport_state,
+              .pRasterizationState = &rasterizer,
+              .pMultisampleState = &multisampling,
+              .pDepthStencilState = &depth_stencil_info,
+              .pColorBlendState = &color_blending,
+              .pDynamicState = &dynamic_state_create_info,
+              .layout = m_PipelineLayout,
+              .renderPass = nullptr,
+          },
+          {
+              .colorAttachmentCount = 1,
+              .pColorAttachmentFormats = &m_SwapChainImgFormat,
+              .depthAttachmentFormat =
+                  find_supported_depth_buffer_format(m_PhysicalDevice),
+          }};
+
+  /* avoid creating render pass objects and use dynamic rendering (Vk >= 1.3) */
+  vk::PipelineRenderingCreateInfo pipeline_rendering_create_info{};
 
   /* finally - create the god damn pipeline object :-) */
-  m_Pipeline = vk::raii::Pipeline(m_Device, nullptr, pipeline_info);
+  m_Pipeline = vk::raii::Pipeline(
+      m_Device, nullptr,
+      pipeline_create_info_chain.get<vk::GraphicsPipelineCreateInfo>());
 }
 
 void VkEngine::create_command_pool() {
@@ -683,6 +705,19 @@ void VkEngine::create_image(uint32_t width, uint32_t height, vk::Format format,
   img.bindMemory(img_memory, 0);
 }
 
+void VkEngine::create_depth_buffer_resources() {
+  vk::Format depth_format =
+      find_supported_depth_buffer_format(m_PhysicalDevice);
+
+  create_image(m_SwapChainExtent.width, m_SwapChainExtent.height, depth_format,
+               vk::ImageTiling::eOptimal,
+               vk::ImageUsageFlagBits::eDepthStencilAttachment,
+               vk::MemoryPropertyFlagBits::eDeviceLocal, m_DepthImg,
+               m_DepthImgMemory);
+  m_DepthImgView = create_image_view(m_DepthImg, depth_format,
+                                     vk::ImageAspectFlagBits::eDepth);
+}
+
 void VkEngine::create_texture_image(std::string_view filename) {
   int width, height, nbr_channels;
   stbi_uc *img_data = stbi_load(filename.data(), &width, &height, &nbr_channels,
@@ -716,7 +751,8 @@ void VkEngine::create_texture_image(std::string_view filename) {
   /* now transition the image to a layout that is optimal for it to be written
    * to as the destination for a transfer operation */
   transition_image_layout(m_TextureImg, vk::ImageLayout::eUndefined,
-                          vk::ImageLayout::eTransferDstOptimal);
+                          vk::ImageLayout::eTransferDstOptimal,
+                          vk::ImageAspectFlagBits::eColor);
 
   copy_buffer_to_image(img_staging_buff, m_TextureImg,
                        static_cast<uint32_t>(width),
@@ -725,11 +761,13 @@ void VkEngine::create_texture_image(std::string_view filename) {
   /* then transition it again to a layout that is optimal for fragment shader
    * reading operations */
   transition_image_layout(m_TextureImg, vk::ImageLayout::eTransferDstOptimal,
-                          vk::ImageLayout::eShaderReadOnlyOptimal);
+                          vk::ImageLayout::eShaderReadOnlyOptimal,
+                          vk::ImageAspectFlagBits::eColor);
 }
 
-vk::raii::ImageView VkEngine::create_image_view(vk::Image img,
-                                                vk::Format format) {
+vk::raii::ImageView
+VkEngine::create_image_view(vk::Image img, vk::Format format,
+                            vk::ImageAspectFlagBits aspect_mask) {
   vk::ImageViewCreateInfo view_create_info{
       .image = img,
       .viewType = vk::ImageViewType::e2D,
@@ -741,7 +779,7 @@ vk::raii::ImageView VkEngine::create_image_view(vk::Image img,
               .b = vk::ComponentSwizzle::eIdentity,
               .a = vk::ComponentSwizzle::eIdentity,
           },
-      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+      .subresourceRange = {.aspectMask = aspect_mask,
                            .baseMipLevel = 0,
                            .levelCount = 1,
                            .baseArrayLayer = 0,
@@ -751,7 +789,8 @@ vk::raii::ImageView VkEngine::create_image_view(vk::Image img,
 }
 
 void VkEngine::create_texture_image_view() {
-  m_TextureImgView = create_image_view(m_TextureImg, vk::Format::eR8G8B8A8Srgb);
+  m_TextureImgView = create_image_view(m_TextureImg, vk::Format::eR8G8B8A8Srgb,
+                                       vk::ImageAspectFlagBits::eColor);
 }
 
 void VkEngine::create_texture_sampler() {
@@ -773,10 +812,9 @@ void VkEngine::create_texture_sampler() {
   m_TextureSampler = vk::raii::Sampler(m_Device, create_info);
 }
 
-uint32_t
-VkEngine::find_memory_type(vk::raii::PhysicalDevice const &physical_device,
-                           uint32_t mem_type_bitmask,
-                           vk::MemoryPropertyFlags properties) {
+uint32_t VkEngine::find_memory_type(const vk::PhysicalDevice physical_device,
+                                    uint32_t mem_type_bitmask,
+                                    vk::MemoryPropertyFlags properties) {
   vk::PhysicalDeviceMemoryProperties mem_props{
       physical_device.getMemoryProperties()};
   for (uint32_t i{0}; i < mem_props.memoryTypeCount; ++i) {
@@ -786,6 +824,43 @@ VkEngine::find_memory_type(vk::raii::PhysicalDevice const &physical_device,
     }
   }
   throw std::runtime_error("failed to find required memory type");
+}
+
+vk::Format
+VkEngine::find_supported_image_format(const vk::PhysicalDevice physical_device,
+                                      std::vector<vk::Format> const &candidates,
+                                      vk::ImageTiling tiling,
+                                      vk::FormatFeatureFlags features) {
+  for (const vk::Format format : candidates) {
+    vk::FormatProperties props = physical_device.getFormatProperties(format);
+    if (tiling == vk::ImageTiling::eLinear &&
+        (props.linearTilingFeatures & features) == features) {
+      return format;
+    }
+
+    if (tiling == vk::ImageTiling::eOptimal &&
+        (props.optimalTilingFeatures & features) == features) {
+      return format;
+    }
+  }
+
+  throw std::runtime_error("failed to find a supported format");
+}
+
+vk::Format VkEngine::find_supported_depth_buffer_format(
+    const vk::PhysicalDevice physical_device) {
+  return VkEngine::find_supported_image_format(
+      physical_device,
+      {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint,
+       vk::Format::eD24UnormS8Uint},
+      vk::ImageTiling::eOptimal,
+      vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+}
+
+bool VkEngine::has_stencil_component(const vk::Format format) {
+  return format == vk::Format::eD32SfloatS8Uint ||
+         format == vk::Format::eD24UnormS8Uint ||
+         format == vk::Format::eD16UnormS8Uint;
 }
 
 void VkEngine::copy_buffer(vk::raii::Buffer &src, vk::raii::Buffer &dst,
@@ -988,7 +1063,7 @@ void VkEngine::create_descriptor_sets() {
   }
 }
 
-vk::raii::CommandBuffer VkEngine::begin_single_time_cmds() {
+vk::raii::CommandBuffer VkEngine::begin_single_time_cmds() const {
   vk::CommandBufferAllocateInfo alloc_info{
       .commandPool = m_GraphicsCmdPool,
       .level = vk::CommandBufferLevel::ePrimary,
@@ -1008,7 +1083,7 @@ vk::raii::CommandBuffer VkEngine::begin_single_time_cmds() {
   return cb;
 }
 
-void VkEngine::end_single_time_cmds(vk::raii::CommandBuffer &cb) {
+void VkEngine::end_single_time_cmds(vk::raii::CommandBuffer &cb) const {
   /* end recording of commands */
   cb.end();
 
@@ -1025,16 +1100,16 @@ void VkEngine::end_single_time_cmds(vk::raii::CommandBuffer &cb) {
   m_GraphicsQueue.waitIdle();
 }
 
-void VkEngine::transition_image_layout(vk::raii::Image const &img,
-                                       vk::ImageLayout from_layout,
-                                       vk::ImageLayout to_layout) {
+void VkEngine::transition_image_layout(
+    vk::Image img, vk::ImageLayout from_layout, vk::ImageLayout to_layout,
+    vk::ImageAspectFlags aspect_flags) const {
   vk::raii::CommandBuffer cb{begin_single_time_cmds()};
   {
     vk::ImageMemoryBarrier barrier{
         .oldLayout = from_layout,
         .newLayout = to_layout,
         .image = img,
-        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+        .subresourceRange = {.aspectMask = aspect_flags,
                              .baseMipLevel = 0,
                              .levelCount = 1,
                              .baseArrayLayer = 0,
@@ -1066,6 +1141,54 @@ void VkEngine::transition_image_layout(vk::raii::Image const &img,
     cb.pipelineBarrier(src_stage, dst_stage, {}, {}, nullptr, barrier);
   }
   end_single_time_cmds(cb);
+}
+
+void VkEngine::transition_swapchain_image_layout(
+    vk::CommandBuffer cb, vk::Image img, vk::ImageLayout old_layout,
+    vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
+    vk::AccessFlags2 dst_access_mask, vk::PipelineStageFlags2 src_stage_mask,
+    vk::PipelineStageFlags2 dst_stage_mask,
+    vk::ImageAspectFlags aspect_flags) const {
+  /* To do so, we need to set up a pipeline barrier - ... a what? You have to
+   * understand something crucial about command buffers in Vulkan - there is
+   * no gurantee whatsoever about the order in which they are going to be
+   * executed. This means that if you record commands A->B->C the driver may
+   * or may not execute these cmds in that submission order.
+   *
+   * It is your job, as a Vulkan application developer, to explecitely set
+   * synchronization mechanisms to ensure a particular executaion order
+   * whithin a subset of the recorded cmds.
+   *
+   * Now back to image layout transition, it is crucial for the layout
+   * transition to occur BEFORE any cmds that will write to that image (think
+   * of draw cmds).
+   * */
+  vk::ImageMemoryBarrier2 img_memory_barrier{
+      .srcStageMask = src_stage_mask,
+      .srcAccessMask = src_access_mask,
+      .dstStageMask = dst_stage_mask,
+      .dstAccessMask = dst_access_mask,
+      .oldLayout = old_layout,
+      .newLayout = new_layout,
+      .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+      .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+      .image = img,
+      .subresourceRange =
+          {
+              .aspectMask = aspect_flags,
+              .baseMipLevel = 0,
+              .levelCount = 1,
+              .baseArrayLayer = 0,
+              .layerCount = 1,
+          },
+  };
+
+  vk::DependencyInfo dependency_info{
+      .dependencyFlags = {},
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers = &img_memory_barrier,
+  };
+  cb.pipelineBarrier2(dependency_info);
 }
 
 void VkEngine::copy_buffer_to_image(vk::raii::Buffer const &buff,
@@ -1124,59 +1247,46 @@ void VkEngine::record_command_buffer(uint32_t curr_frame_idx,
 
   /* First, transition the swap chain image into an a layout suitable for color
    * attachment operations (i.e., shader writing to it, etc.). */
-  {
-    /* To do so, we need to set up a pipeline barrier - ... a what? You have to
-     * understand something crucial about command buffers in Vulkan - there is
-     * no gurantee whatsoever about the order in which they are going to be
-     * executed. This means that if you record commands A->B->C the driver may
-     * or may not execute these cmds in that submission order.
-     *
-     * It is your job, as a Vulkan application developer, to explecitely set
-     * synchronization mechanisms to ensure a particular executaion order
-     * whithin a subset of the recorded cmds.
-     *
-     * Now back to image layout transition, it is crucial for the layout
-     * transition to occur BEFORE any cmds that will write to that image (think
-     * of draw cmds).
-     * */
-    vk::ImageMemoryBarrier2 pipeline_barrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-        .srcAccessMask = {},
-        .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-        .oldLayout = vk::ImageLayout::eUndefined,
-        .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-        .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-        .image = m_SwapChainImgs[swapchain_image_idx],
-        .subresourceRange =
-            {
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-    };
+  transition_swapchain_image_layout(
+      cb, m_SwapChainImgs[swapchain_image_idx], vk::ImageLayout::eUndefined,
+      vk::ImageLayout::eColorAttachmentOptimal,
+      {}, /* no need to wait for previous op */
+      vk::AccessFlagBits2::eColorAttachmentWrite,
+      vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+      vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+      vk::ImageAspectFlagBits::eColor);
 
-    vk::DependencyInfo dependency_info{
-        .dependencyFlags = {},
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &pipeline_barrier,
-    };
-    cb.pipelineBarrier2(dependency_info);
-  }
+  /* then similarely for the depth buffer attachment, transition it into a
+   * layout that is suitable for shaders to write into it */
+  transition_swapchain_image_layout(
+      cb, *m_DepthImg, vk::ImageLayout::eUndefined,
+      vk::ImageLayout::eDepthAttachmentOptimal,
+      vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+      vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+      vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+          vk::PipelineStageFlagBits2::eLateFragmentTests,
+      vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+          vk::PipelineStageFlagBits2::eLateFragmentTests,
+      vk::ImageAspectFlagBits::eDepth);
 
   /* Then, setup the rendering info; which area to render to, which image view
    * to use for rendering, which clear color, which operations to perform before
    * and after rendering, etc. */
   auto clear_color = vk::ClearColorValue{0.0f, 0.0f, 0.0f, 0.0f};
+  auto clear_depth = vk::ClearDepthStencilValue{1.0f, 0};
   vk::RenderingAttachmentInfo attachment_info{
       .imageView = m_SwapChainImgViews[swapchain_image_idx],
       .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
       .loadOp = vk::AttachmentLoadOp::eClear,
       .storeOp = vk::AttachmentStoreOp::eStore,
       .clearValue = clear_color,
+  };
+  vk::RenderingAttachmentInfo depth_attachment_info{
+      .imageView = m_DepthImgView,
+      .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+      .loadOp = vk::AttachmentLoadOp::eClear,
+      .storeOp = vk::AttachmentStoreOp::eDontCare,
+      .clearValue = clear_depth,
   };
   vk::RenderingInfo rendering_info{
       .renderArea =
@@ -1187,6 +1297,7 @@ void VkEngine::record_command_buffer(uint32_t curr_frame_idx,
       .layerCount = 1,
       .colorAttachmentCount = 1,
       .pColorAttachments = &attachment_info,
+      .pDepthAttachment = &depth_attachment_info,
   };
 
   { /* BEGIN RENDERING */

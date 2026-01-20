@@ -18,7 +18,7 @@
 namespace vkengine {
 
 struct Vertex {
-  glm::vec2 pos;   /* vertex position */
+  glm::vec3 pos;   /* vertex position */
   glm::vec3 color; /* vertex colors */
   glm::vec2 uv;    /* texture coordinates */
 
@@ -36,7 +36,8 @@ struct Vertex {
     return {
         vk::VertexInputAttributeDescription{.location = 0,
                                             .binding = 0,
-                                            .format = vk::Format::eR32G32Sfloat,
+                                            .format =
+                                                vk::Format::eR32G32B32Sfloat,
                                             .offset = offsetof(Vertex, pos)},
         vk::VertexInputAttributeDescription{.location = 1,
                                             .binding = 0,
@@ -124,13 +125,17 @@ private:
                     vk::MemoryPropertyFlags mem_property_flags,
                     vk::raii::Image &img, vk::raii::DeviceMemory &img_memory);
 
+  void create_depth_buffer_resources();
+
   void create_texture_image(std::string_view filename);
 
   void create_texture_image_view();
 
   void create_texture_sampler();
 
-  vk::raii::ImageView create_image_view(vk::Image img, vk::Format format);
+  [[nodiscard]]
+  vk::raii::ImageView create_image_view(vk::Image img, vk::Format format,
+                                        vk::ImageAspectFlagBits aspect_mask);
 
   void create_vertex_buffer();
 
@@ -162,13 +167,22 @@ private:
 
   void create_descriptor_sets();
 
-  vk::raii::CommandBuffer begin_single_time_cmds();
+  vk::raii::CommandBuffer begin_single_time_cmds() const;
 
-  void end_single_time_cmds(vk::raii::CommandBuffer &cb);
+  void end_single_time_cmds(vk::raii::CommandBuffer &cb) const;
 
-  void transition_image_layout(vk::raii::Image const &img,
-                               vk::ImageLayout from_layout,
-                               vk::ImageLayout to_layout);
+  /* Do not use this for swapchain image (e.g., color, buffer, etc.) layout
+   * transitions! */
+  void transition_image_layout(vk::Image img, vk::ImageLayout from_layout,
+                               vk::ImageLayout to_layout,
+                               vk::ImageAspectFlags aspect_flags) const;
+
+  void transition_swapchain_image_layout(
+      vk::CommandBuffer cb, vk::Image img, vk::ImageLayout old_layout,
+      vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
+      vk::AccessFlags2 dst_access_mask, vk::PipelineStageFlags2 src_stage_mask,
+      vk::PipelineStageFlags2 dst_stage_mask,
+      vk::ImageAspectFlags img_aspect_flags) const;
 
   void copy_buffer_to_image(vk::raii::Buffer const &buff,
                             vk::raii::Image const &img, uint32_t width,
@@ -195,10 +209,20 @@ private:
                             vk::raii::Buffer &buffer,
                             vk::raii::DeviceMemory &dev_mem);
 
-  static uint32_t
-  find_memory_type(vk::raii::PhysicalDevice const &physical_device,
-                   uint32_t mem_type_filter,
-                   vk::MemoryPropertyFlags properties);
+  static uint32_t find_memory_type(const vk::PhysicalDevice physical_device,
+                                   uint32_t mem_type_filter,
+                                   vk::MemoryPropertyFlags properties);
+
+  static vk::Format
+  find_supported_image_format(const vk::PhysicalDevice physical_device,
+                              std::vector<vk::Format> const &candidates,
+                              vk::ImageTiling tiling,
+                              vk::FormatFeatureFlags features);
+
+  static vk::Format
+  find_supported_depth_buffer_format(const vk::PhysicalDevice physical_device);
+
+  static bool has_stencil_component(const vk::Format format);
 
   /****************************************************************************/
 
@@ -269,6 +293,14 @@ private:
 
   /****************************************************************************/
 
+  /****************************** DEPTH BUFFER ********************************/
+
+  vk::raii::Image m_DepthImg{nullptr};
+  vk::raii::DeviceMemory m_DepthImgMemory{nullptr};
+  vk::raii::ImageView m_DepthImgView{nullptr};
+
+  /****************************************************************************/
+
   uint32_t m_GraphicsQueueFamilyIdx;
   uint32_t m_PresentQueueFamilyIdx;
 
@@ -288,16 +320,22 @@ private:
 
   /* Vertex triangle data (for testing purposes) */
   const std::vector<Vertex> TEST_RECTANGLE_VERTICES{
-      {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+      /* first plane */
+      {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+      {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+      {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+      {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+      /* second plane */
+      {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+      {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+      {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+      {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
   };
 
-  const std::vector<uint16_t> TEST_RECTANGLE_INDICES{
-      0, 1, 2, /* triangle 0 */
-      2, 3, 0, /* triangle 1 */
-  };
+  const std::vector<uint16_t> TEST_RECTANGLE_INDICES{/* first plane */
+                                                     0, 1, 2, 2, 3, 0,
+                                                     /* second plane */
+                                                     4, 5, 6, 6, 7, 4};
 
   /****************************************************************************/
 };

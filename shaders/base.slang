@@ -2,7 +2,7 @@
 // ATTRIBUTES
 //////////////////////////////////////////
 struct VertexInput {
-  float2 pos;
+  float3 pos;
   float3 color;
   float2 uv;
 }
@@ -32,7 +32,7 @@ Sampler2D texture;
 [shader("vertex")]
 VertexOutput vert_main(VertexInput i) {
   VertexOutput o;
-  o.pos = mul(mvp.proj, mul(mvp.view, mul(mvp.model, float4(i.pos, 0.0, 1.0))));
+  o.pos = mul(mvp.proj, mul(mvp.view, mul(mvp.model, float4(i.pos, 1.0))));
   o.color = i.color;
   o.uv = i.uv;
   return o;
