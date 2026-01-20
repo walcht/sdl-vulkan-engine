@@ -18,8 +18,9 @@
 namespace vkengine {
 
 struct Vertex {
-  glm::vec2 pos;
-  glm::vec3 color;
+  glm::vec2 pos;   /* vertex position */
+  glm::vec3 color; /* vertex colors */
+  glm::vec2 uv;    /* texture coordinates */
 
   static vk::VertexInputBindingDescription get_binding_description() {
     return {/* index of binding */
@@ -30,7 +31,7 @@ struct Vertex {
             .inputRate = vk::VertexInputRate::eVertex};
   }
 
-  static std::array<vk::VertexInputAttributeDescription, 2>
+  static std::array<vk::VertexInputAttributeDescription, 3>
   get_attribute_descriptions() {
     return {
         vk::VertexInputAttributeDescription{.location = 0,
@@ -42,6 +43,12 @@ struct Vertex {
                                             .format =
                                                 vk::Format::eR32G32B32Sfloat,
                                             .offset = offsetof(Vertex, color)},
+        vk::VertexInputAttributeDescription{
+            .location = 2,
+            .binding = 0,
+            .format = vk::Format::eR32G32Sfloat,
+            .offset = offsetof(Vertex, uv),
+        },
     };
   }
 };
@@ -281,10 +288,10 @@ private:
 
   /* Vertex triangle data (for testing purposes) */
   const std::vector<Vertex> TEST_RECTANGLE_VERTICES{
-      {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+      {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
   };
 
   const std::vector<uint16_t> TEST_RECTANGLE_INDICES{

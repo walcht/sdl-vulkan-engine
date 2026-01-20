@@ -496,9 +496,23 @@ void VkEngine::init_descriptor_set_layouts() {
       .stageFlags = vk::ShaderStageFlagBits::eVertex,
       .pImmutableSamplers = nullptr,
   };
+
+  vk::DescriptorSetLayoutBinding combined_2d_sampler{
+      .binding = 1,
+      .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+      .descriptorCount = 1,
+      .stageFlags = vk::ShaderStageFlagBits::eFragment,
+      .pImmutableSamplers = nullptr,
+  };
+
+  /* apparently I can't fucking use aggregates inside an array initialization,
+   * go fucking figure why ... */
+  std::array<vk::DescriptorSetLayoutBinding, 2> layout_bindings = {
+      mvp_layout_binding, combined_2d_sampler};
+
   vk::DescriptorSetLayoutCreateInfo layout_info{
-      .bindingCount = 1,
-      .pBindings = &mvp_layout_binding,
+      .bindingCount = layout_bindings.size(),
+      .pBindings = layout_bindings.data(),
   };
   m_DesriptorSetLayout = vk::raii::DescriptorSetLayout(m_Device, layout_info);
 }
@@ -904,16 +918,24 @@ void VkEngine::update_mvp(uint32_t curr_frame) {
 }
 
 void VkEngine::create_descriptor_pool() {
-  vk::DescriptorPoolSize pool_size{
+  vk::DescriptorPoolSize mvp_pool{
       .type = vk::DescriptorType::eUniformBuffer,
       .descriptorCount = MAX_NBR_FRAMES_IN_FLIGHT,
   };
 
+  vk::DescriptorPoolSize combined_2d_sampler_pool{
+      .type = vk::DescriptorType::eCombinedImageSampler,
+      .descriptorCount = MAX_NBR_FRAMES_IN_FLIGHT,
+  };
+
+  std::array<vk::DescriptorPoolSize, 2> pools = {mvp_pool,
+                                                 combined_2d_sampler_pool};
+
   vk::DescriptorPoolCreateInfo pool_create_info{
       .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
       .maxSets = MAX_NBR_FRAMES_IN_FLIGHT, /* a set foreach in-flight frame */
-      .poolSizeCount = 1,
-      .pPoolSizes = &pool_size,
+      .poolSizeCount = pools.size(),
+      .pPoolSizes = pools.data(),
   };
 
   m_DesriptorPool = vk::raii::DescriptorPool(m_Device, pool_create_info);
@@ -936,8 +958,7 @@ void VkEngine::create_descriptor_sets() {
         .offset = 0,
         .range = sizeof(MVP),
     };
-
-    vk::WriteDescriptorSet descriptor_write{
+    vk::WriteDescriptorSet buffer_descriptor_write{
         .dstSet = m_DescriptorSets[i],
         .dstBinding = 0,
         .dstArrayElement = 0,
@@ -946,7 +967,24 @@ void VkEngine::create_descriptor_sets() {
         .pBufferInfo = &buffer_info,
     };
 
-    m_Device.updateDescriptorSets(descriptor_write, {});
+    vk::DescriptorImageInfo img_info{
+        .sampler = m_TextureSampler,
+        .imageView = m_TextureImgView,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    vk::WriteDescriptorSet img_descriptor_write{
+        .dstSet = m_DescriptorSets[i],
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .pImageInfo = &img_info,
+    };
+
+    std::array<vk::WriteDescriptorSet, 2> descriptor_writes = {
+        buffer_descriptor_write, img_descriptor_write};
+
+    m_Device.updateDescriptorSets(descriptor_writes, {});
   }
 }
 
